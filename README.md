@@ -70,8 +70,11 @@ flowchart LR
 - `POST /v1/intercept/openai`: normalize an OpenAI-style tool call, enrich context, evaluate policy, and return a signed decision token on allow.
 - `POST /v1/intercept/openai/stream`: reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
 - `POST /v1/intercept/anthropic`: normalize an Anthropic tool-use payload and run the same deterministic policy/token flow.
+- `POST /v1/intercept/framework/generic`: accept framework-native payloads with explicit tool name and parameters.
+- `POST /v1/intercept/framework/langchain`: normalize LangChain-style tool invocation payloads.
 - `POST /v1/execute/verify/openai`: verify a signed token against the normalized execution request and reject replay.
 - `POST /v1/execute/verify/anthropic`: verify a signed token for Anthropic-normalized execution requests.
+- `POST /v1/execute/verify/canonical`: verify a signed token against a canonical request payload.
 - `POST /v1/state/actions`: record prior actions used for sequence-aware policy checks.
 - `GET /metrics`: expose low-overhead in-process counters in Prometheus text format.
 
@@ -131,8 +134,7 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Add framework-style translator adapters on top of the canonical schema.
-2. Add true chunk-by-chunk streaming race orchestration with early deny behavior.
-3. Add tracing across intercept, PDP, token issue, and token verify paths.
-4. Expand policy coverage and automate `opa test` in CI.
-5. Build the governance control plane.
+1. Add true chunk-by-chunk streaming race orchestration with early deny behavior.
+2. Add tracing across intercept, PDP, token issue, and token verify paths.
+3. Expand policy coverage for edge and abuse cases.
+4. Build the governance control plane.

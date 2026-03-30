@@ -136,18 +136,19 @@ When adding a new service or package:
 - [x] Add focused unit tests for schema, translation, PDP, token verification, state, and service handlers.
 - [x] Add streamed tool-call chunk reconstruction.
 - [x] Add Anthropic adapter.
-- [ ] Add framework adapters.
-- [ ] Add first-class tracing and CI automation for policy tests.
+- [x] Add framework adapters.
+- [ ] Add first-class tracing.
+- [x] Add CI automation for `go test` and `opa test`.
 - [x] Add first-class in-process metrics and `/metrics` endpoint.
+- [x] Expand baseline policy regression coverage for SQL, Slack, Stripe, and temporal context.
 - [ ] Build the control-plane application.
 
 ## Immediate Build Targets
 
 The next code changes should usually start here:
 
-1. `internal/translator/` to add framework adapters (LangChain-style and generic SDK payloads).
-2. `internal/interceptor/` to support true chunk-by-chunk streaming race orchestration with early deny.
-3. `internal/telemetry/` to add tracing spans and propagation for policy and token paths.
-4. `policy/tests/` to expand regression fixtures across SQL, Slack, Stripe, and temporal rules.
-5. CI wiring to run `go test` and `opa test` on every change.
-6. `apps/control-plane/` for governance workflows and simulation.
+1. `internal/interceptor/` to support true chunk-by-chunk streaming race orchestration with early deny.
+2. `internal/telemetry/` to add tracing spans and propagation for policy and token paths.
+3. `policy/tests/` to add edge-case and adversarial fixtures.
+4. `apps/control-plane/` for governance workflows and simulation.
+5. End-to-end integration tests that exercise OPA, Redis, and replay protection together.
