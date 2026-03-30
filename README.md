@@ -136,5 +136,4 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Build the governance control plane MVP.
-2. Add signing-key rotation hardening and pilot readiness verification.
+1. Add signing-key rotation hardening and pilot readiness verification.
