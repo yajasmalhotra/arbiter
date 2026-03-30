@@ -379,3 +379,106 @@ func TestServiceVerifyAnthropicRejectsReplay(t *testing.T) {
 		t.Fatalf("expected replay verify to fail, got %d", replayRecorder.Code)
 	}
 }
+
+func TestServiceInterceptGenericFramework(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(pdp.StaticDecider{
+		Decision: schema.Decision{
+			Allow:         true,
+			Reason:        "allowed",
+			PolicyPackage: "arbiter.authz",
+			PolicyVersion: "v1",
+			DataRevision:  "rev-1",
+			DecisionID:    "decision-framework-generic",
+		},
+	}, state.NewMemoryStore())
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(translator.GenericFrameworkEnvelope{
+		Metadata: schema.Metadata{
+			RequestID: "req-fw-1",
+			TenantID:  "tenant-1",
+			Provider:  "framework",
+		},
+		AgentContext: schema.AgentContext{
+			Actor: schema.Actor{ID: "actor-1"},
+		},
+		ToolName:   "send_slack_message",
+		Parameters: []byte(`{"channel":"ops","message":"hello"}`),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/intercept/framework/generic", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServiceVerifyCanonicalRejectsReplay(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(pdp.StaticDecider{
+		Decision: schema.Decision{
+			Allow:         true,
+			Reason:        "allowed",
+			PolicyPackage: "arbiter.authz",
+			PolicyVersion: "v1",
+			DataRevision:  "rev-1",
+			DecisionID:    "decision-canonical-verify",
+		},
+	}, state.NewMemoryStore())
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+
+	envelope := translator.GenericFrameworkEnvelope{
+		Metadata: schema.Metadata{
+			RequestID: "req-fw-2",
+			TenantID:  "tenant-1",
+			Provider:  "framework",
+		},
+		AgentContext: schema.AgentContext{
+			Actor: schema.Actor{ID: "actor-1"},
+		},
+		ToolName:   "run_sql_query",
+		Parameters: []byte(`{"query":"select 1"}`),
+	}
+
+	interceptBody, _ := json.Marshal(envelope)
+	interceptReq := httptest.NewRequest(http.MethodPost, "/v1/intercept/framework/generic", bytes.NewReader(interceptBody))
+	interceptRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(interceptRecorder, interceptReq)
+
+	var signed schema.SignedDecision
+	if err := json.NewDecoder(interceptRecorder.Body).Decode(&signed); err != nil {
+		t.Fatalf("decode intercept response: %v", err)
+	}
+
+	req, err := translator.NormalizeGenericFramework(envelope, 1024)
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+
+	verifyBody, _ := json.Marshal(map[string]any{
+		"token":   signed.Token,
+		"request": req,
+	})
+
+	verifyReq := httptest.NewRequest(http.MethodPost, "/v1/execute/verify/canonical", bytes.NewReader(verifyBody))
+	verifyRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(verifyRecorder, verifyReq)
+	if verifyRecorder.Code != http.StatusOK {
+		t.Fatalf("expected first verify to pass, got %d", verifyRecorder.Code)
+	}
+
+	replayReq := httptest.NewRequest(http.MethodPost, "/v1/execute/verify/canonical", bytes.NewReader(verifyBody))
+	replayRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(replayRecorder, replayReq)
+	if replayRecorder.Code != http.StatusForbidden {
+		t.Fatalf("expected replay verify to fail, got %d", replayRecorder.Code)
+	}
+}

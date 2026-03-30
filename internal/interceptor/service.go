@@ -42,6 +42,11 @@ type verifyAnthropicExecutionRequest struct {
 	Envelope translator.AnthropicEnvelope `json:"envelope"`
 }
 
+type verifyCanonicalExecutionRequest struct {
+	Token   string                  `json:"token"`
+	Request schema.CanonicalRequest `json:"request"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }
@@ -78,8 +83,11 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/intercept/openai", s.handleOpenAIIntercept)
 	mux.HandleFunc("POST /v1/intercept/openai/stream", s.handleOpenAIStreamIntercept)
 	mux.HandleFunc("POST /v1/intercept/anthropic", s.handleAnthropicIntercept)
+	mux.HandleFunc("POST /v1/intercept/framework/generic", s.handleGenericFrameworkIntercept)
+	mux.HandleFunc("POST /v1/intercept/framework/langchain", s.handleLangChainIntercept)
 	mux.HandleFunc("POST /v1/execute/verify/openai", s.handleOpenAIVerify)
 	mux.HandleFunc("POST /v1/execute/verify/anthropic", s.handleAnthropicVerify)
+	mux.HandleFunc("POST /v1/execute/verify/canonical", s.handleCanonicalVerify)
 	mux.HandleFunc("POST /v1/state/actions", s.handleRecordAction)
 }
 
@@ -183,6 +191,63 @@ func (s *Service) handleAnthropicVerify(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if _, err := s.issuer.Verify(r.Context(), reqBody.Token, req); err != nil {
+		status := http.StatusForbidden
+		if !errors.Is(err, executorauth.ErrInvalidToken) && !errors.Is(err, executorauth.ErrReplayDetected) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+}
+
+func (s *Service) handleGenericFrameworkIntercept(w http.ResponseWriter, r *http.Request) {
+	var envelope translator.GenericFrameworkEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	req, err := translator.NormalizeGenericFramework(envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	s.handleCanonicalIntercept(w, r, req)
+}
+
+func (s *Service) handleLangChainIntercept(w http.ResponseWriter, r *http.Request) {
+	var envelope translator.LangChainEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	req, err := translator.NormalizeLangChain(envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	s.handleCanonicalIntercept(w, r, req)
+}
+
+func (s *Service) handleCanonicalVerify(w http.ResponseWriter, r *http.Request) {
+	var reqBody verifyCanonicalExecutionRequest
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	reqBody.Request.Normalize()
+	if err := reqBody.Request.Validate(s.config.MaxParameterBytes); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if _, err := s.issuer.Verify(r.Context(), reqBody.Token, reqBody.Request); err != nil {
 		status := http.StatusForbidden
 		if !errors.Is(err, executorauth.ErrInvalidToken) && !errors.Is(err, executorauth.ErrReplayDetected) {
 			status = http.StatusServiceUnavailable
