@@ -69,6 +69,7 @@ flowchart LR
 - `GET /healthz`: lightweight health endpoint.
 - `POST /v1/intercept/openai`: normalize an OpenAI-style tool call, enrich context, evaluate policy, and return a signed decision token on allow.
 - `POST /v1/intercept/openai/stream`: reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
+- `POST /v1/intercept/openai/stream/race`: run a chunk-phase stream intercept path with fast early deny checks before full decisioning.
 - `POST /v1/intercept/anthropic`: normalize an Anthropic tool-use payload and run the same deterministic policy/token flow.
 - `POST /v1/intercept/framework/generic`: accept framework-native payloads with explicit tool name and parameters.
 - `POST /v1/intercept/framework/langchain`: normalize LangChain-style tool invocation payloads.
@@ -77,6 +78,7 @@ flowchart LR
 - `POST /v1/execute/verify/canonical`: verify a signed token against a canonical request payload.
 - `POST /v1/state/actions`: record prior actions used for sequence-aware policy checks.
 - `GET /metrics`: expose low-overhead in-process counters in Prometheus text format.
+- `X-Arbiter-Trace-ID`: propagated request trace identifier returned on responses and injected into decision metadata.
 
 ## Planned Repository Shape
 
@@ -134,7 +136,7 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Add true chunk-by-chunk streaming race orchestration with early deny behavior.
-2. Add tracing across intercept, PDP, token issue, and token verify paths.
-3. Expand policy coverage for edge and abuse cases.
-4. Build the governance control plane.
+1. Expand policy coverage for edge and abuse cases.
+2. Build the governance control plane.
+3. Add end-to-end integration tests for OPA, Redis, and replay protection.
+4. Add distributed trace export plumbing.

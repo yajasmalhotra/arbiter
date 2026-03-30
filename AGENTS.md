@@ -137,18 +137,18 @@ When adding a new service or package:
 - [x] Add streamed tool-call chunk reconstruction.
 - [x] Add Anthropic adapter.
 - [x] Add framework adapters.
-- [ ] Add first-class tracing.
+- [x] Add first-class tracing.
 - [x] Add CI automation for `go test` and `opa test`.
 - [x] Add first-class in-process metrics and `/metrics` endpoint.
 - [x] Expand baseline policy regression coverage for SQL, Slack, Stripe, and temporal context.
+- [x] Add chunk-phase stream intercept route with fast early deny gate.
 - [ ] Build the control-plane application.
 
 ## Immediate Build Targets
 
 The next code changes should usually start here:
 
-1. `internal/interceptor/` to support true chunk-by-chunk streaming race orchestration with early deny.
-2. `internal/telemetry/` to add tracing spans and propagation for policy and token paths.
-3. `policy/tests/` to add edge-case and adversarial fixtures.
-4. `apps/control-plane/` for governance workflows and simulation.
-5. End-to-end integration tests that exercise OPA, Redis, and replay protection together.
+1. `policy/tests/` to add edge-case and adversarial fixtures.
+2. `apps/control-plane/` for governance workflows and simulation.
+3. End-to-end integration tests that exercise OPA, Redis, and replay protection together.
+4. Distributed tracing export plumbing (OTLP) on top of current trace propagation.

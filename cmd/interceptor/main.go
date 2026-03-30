@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"arbiter/internal/audit"
@@ -30,6 +31,7 @@ func main() {
 	maxBodyBytes := getInt64Env("ARBITER_MAX_BODY_BYTES", 1<<20)
 	maxParameterBytes := getIntEnv("ARBITER_MAX_PARAMETER_BYTES", 32<<10)
 	stateLookupLimit := getIntEnv("ARBITER_STATE_LOOKUP_LIMIT", 10)
+	fastAllowedTools := getCSVEnv("ARBITER_FAST_ALLOWED_TOOLS")
 
 	var (
 		stateStore state.Store              = state.NewMemoryStore()
@@ -53,6 +55,7 @@ func main() {
 			MaxParameterBytes: maxParameterBytes,
 			DecisionTimeout:   decisionTimeout,
 			StateLookupLimit:  stateLookupLimit,
+			FastAllowedTools:  fastAllowedTools,
 		},
 		stateStore,
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),
@@ -67,7 +70,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           telemetry.WithTrace(mux),
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      5 * time.Second,
@@ -122,4 +125,21 @@ func getDurationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func getCSVEnv(key string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		values = append(values, trimmed)
+	}
+	return values
 }
