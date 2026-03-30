@@ -7,7 +7,7 @@ The product goal is simple: agent reasoning can stay probabilistic, but tool exe
 
 ## Status
 
-This repository is currently in bootstrap phase. The first milestone is to establish the core contracts, hot-path services, and policy layout for an MVP.
+The initial backend MVP is implemented. The repository now includes a Go interception service, canonical request normalization, OPA decision integration, signed execution-token verification, state enrichment, initial Rego policies, unit tests, and a local Docker stack for OPA and Redis.
 
 ## MVP Principles
 
@@ -64,6 +64,13 @@ flowchart LR
 - Next.js application for policy data CRUD, audit review, and shadow simulation.
 - Manages rollout states such as `draft`, `shadow`, `canary`, and `enforced`.
 
+## Current API Surface
+
+- `GET /healthz`: lightweight health endpoint.
+- `POST /v1/intercept/openai`: normalize an OpenAI-style tool call, enrich context, evaluate policy, and return a signed decision token on allow.
+- `POST /v1/execute/verify/openai`: verify a signed token against the normalized execution request and reject replay.
+- `POST /v1/state/actions`: record prior actions used for sequence-aware policy checks.
+
 ## Planned Repository Shape
 
 ```text
@@ -111,10 +118,17 @@ deploy/helm/
 - Replay tests for historical decisions.
 - Load and chaos tests for hot-path dependencies.
 
+## Local Development
+
+```bash
+go test ./...
+docker compose -f deploy/docker-compose.yml up --build
+```
+
 ## Immediate Next Steps
 
-1. Initialize the Go module and create the core package layout.
-2. Define the versioned canonical schema under `internal/schema/`.
-3. Add provider fixtures and translator tests.
-4. Create the first OPA policy bundles under `policy/core/` and `policy/domain/`.
-5. Stand up a local development stack with OPA and Redis.
+1. Add streaming chunk reconstruction for LiteLLM-style tool-call deltas.
+2. Add Anthropic- and framework-style translator adapters on top of the canonical schema.
+3. Replace the minimal telemetry layer with exported metrics and traces.
+4. Expand policy coverage and automate `opa test` in CI.
+5. Build the governance control plane.

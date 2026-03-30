@@ -1,0 +1,38 @@
+services:
+  arbiter:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      ARBITER_ADDR: ":8080"
+      ARBITER_OPA_URL: "http://opa:8181"
+      ARBITER_REDIS_ADDR: "redis:6379"
+      ARBITER_TOKEN_SECRET: "dev-secret-change-me"
+      ARBITER_TOKEN_ISSUER: "arbiter"
+      ARBITER_DECISION_TIMEOUT: "1500ms"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - opa
+      - redis
+
+  opa:
+    image: openpolicyagent/opa:latest
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policy"
+    volumes:
+      - ../policy:/policy:ro
+    ports:
+      - "8181:8181"
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "no"
+    ports:
+      - "6379:6379"
