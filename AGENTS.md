@@ -124,14 +124,28 @@ When adding a new service or package:
 - Update this file if the service boundary, implementation order, or invariants change.
 - Keep examples aligned with the current canonical schema version.
 
+## Build Progress
+
+- [x] Bootstrap the Go module and package layout.
+- [x] Define the versioned canonical schema and request hashing.
+- [x] Add OpenAI normalization and golden-style translation tests.
+- [x] Implement OPA decisioning and signed execution-token flow.
+- [x] Implement execution-time token verification with replay protection.
+- [x] Build the HTTP interception service and action-recording endpoints.
+- [x] Add initial Rego policies, policy data, and local Docker runtime wiring.
+- [x] Add focused unit tests for schema, translation, PDP, token verification, state, and service handlers.
+- [ ] Add streamed tool-call chunk reconstruction.
+- [ ] Add Anthropic and framework adapters.
+- [ ] Add first-class metrics, traces, and CI automation for policy tests.
+- [ ] Build the control-plane application.
+
 ## Immediate Build Targets
 
 The next code changes should usually start here:
 
-1. `go.mod`
-2. `cmd/interceptor/main.go`
-3. `internal/schema/`
-4. `internal/translator/`
-5. `internal/pdp/`
-6. `policy/core/` and `policy/domain/`
-7. `deploy/docker-compose.yml`
+1. `internal/interceptor/` for streamed tool-call reconstruction and bounded buffering.
+2. `internal/translator/` for Anthropic and framework adapters.
+3. `internal/telemetry/` for exported metrics and tracing.
+4. `policy/tests/` for broader policy coverage and regression fixtures.
+5. `apps/control-plane/` for governance workflows and simulation.
+6. `deploy/docker-compose.yml` and CI wiring for integration and policy test automation.
