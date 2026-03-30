@@ -128,3 +128,31 @@ func TestReconstructOpenAIToolCallRejectsOversizedPayload(t *testing.T) {
 		t.Fatal("expected oversized streamed argument error")
 	}
 }
+
+func TestOpenAIToolCallAssemblerBuildsIncrementally(t *testing.T) {
+	t.Parallel()
+
+	assembler := NewOpenAIToolCallAssembler(1024)
+	if err := assembler.AddChunk(OpenAIToolCallChunk{
+		ID:           "call-1",
+		Type:         "function",
+		FunctionName: "run_sql_query",
+	}); err != nil {
+		t.Fatalf("add name chunk: %v", err)
+	}
+	if assembler.ToolName() != "run_sql_query" {
+		t.Fatalf("unexpected tool name: %s", assembler.ToolName())
+	}
+
+	if err := assembler.AddChunk(OpenAIToolCallChunk{ArgumentsDelta: `{"query":"select 1"}`}); err != nil {
+		t.Fatalf("add args chunk: %v", err)
+	}
+
+	toolCall, err := assembler.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if toolCall.Function.Name != "run_sql_query" {
+		t.Fatalf("unexpected function name: %s", toolCall.Function.Name)
+	}
+}

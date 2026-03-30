@@ -9,6 +9,7 @@ import (
 type Event struct {
 	DecisionID    string
 	RequestID     string
+	TraceID       string
 	TenantID      string
 	ToolName      string
 	Allow         bool
@@ -37,6 +38,7 @@ func (r *LogRecorder) Record(_ context.Context, event Event) {
 	r.logger.Info("arbiter decision",
 		slog.String("decision_id", event.DecisionID),
 		slog.String("request_id", event.RequestID),
+		slog.String("trace_id", event.TraceID),
 		slog.String("tenant_id", event.TenantID),
 		slog.String("tool_name", event.ToolName),
 		slog.Bool("allow", event.Allow),

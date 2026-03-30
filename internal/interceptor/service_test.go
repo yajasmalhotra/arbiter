@@ -13,6 +13,7 @@ import (
 	"arbiter/internal/pdp"
 	"arbiter/internal/schema"
 	"arbiter/internal/state"
+	"arbiter/internal/telemetry"
 	"arbiter/internal/translator"
 )
 
@@ -415,6 +416,103 @@ func TestServiceInterceptGenericFramework(t *testing.T) {
 	mux.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServiceStreamRaceRejectsToolOutsideFastGate(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(Config{
+		MaxBodyBytes:      4096,
+		MaxParameterBytes: 1024,
+		DecisionTimeout:   time.Second,
+		StateLookupLimit:  5,
+		FastAllowedTools:  []string{"send_slack_message"},
+	}, state.NewMemoryStore(), pdp.StaticDecider{
+		Decision: schema.Decision{
+			Allow:         true,
+			Reason:        "allowed",
+			PolicyPackage: "arbiter.authz",
+			PolicyVersion: "v1",
+			DataRevision:  "rev-1",
+			DecisionID:    "decision-fast-gate",
+		},
+	}, executorauth.NewIssuerVerifier([]byte("top-secret"), "arbiter", time.Minute, executorauth.NewMemoryReplayCache()), nil, nil)
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+
+	body, _ := json.Marshal(translator.OpenAIStreamEnvelope{
+		Metadata: schema.Metadata{
+			RequestID: "req-stream-fast",
+			TenantID:  "tenant-1",
+			Provider:  "openai",
+		},
+		AgentContext: schema.AgentContext{
+			Actor: schema.Actor{ID: "actor-1"},
+		},
+		Chunks: []translator.OpenAIToolCallChunk{
+			{ID: "call-1", Type: "function", FunctionName: "create_stripe_refund", ArgumentsDelta: `{"amount_cents":100}`},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/intercept/openai/stream/race", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServiceInjectsTraceIDFromContext(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {
+		if req.Metadata.TraceID == "" {
+			t.Fatal("expected trace id on canonical request")
+		}
+		return schema.Decision{
+			Allow:         true,
+			Reason:        "allowed",
+			PolicyPackage: "arbiter.authz",
+			PolicyVersion: "v1",
+			DataRevision:  "rev-1",
+			DecisionID:    "decision-trace",
+		}, nil
+	}), state.NewMemoryStore())
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+	handler := telemetry.WithTrace(mux)
+
+	body, _ := json.Marshal(translator.OpenAIEnvelope{
+		Metadata: schema.Metadata{
+			RequestID: "req-trace-1",
+			TenantID:  "tenant-1",
+			Provider:  "openai",
+		},
+		AgentContext: schema.AgentContext{
+			Actor: schema.Actor{ID: "actor-1"},
+		},
+		ToolCall: translator.OpenAIToolCall{
+			Type: "function",
+			Function: translator.OpenAIFunctionToolCall{
+				Name:      "send_slack_message",
+				Arguments: `{"channel":"ops","message":"hello"}`,
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/intercept/openai", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get(telemetry.HeaderTraceID) == "" {
+		t.Fatal("expected trace id header")
 	}
 }
 

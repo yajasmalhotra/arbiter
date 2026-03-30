@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"arbiter/internal/audit"
@@ -21,15 +22,17 @@ type Config struct {
 	MaxParameterBytes int
 	DecisionTimeout   time.Duration
 	StateLookupLimit  int
+	FastAllowedTools  []string
 }
 
 type Service struct {
-	config     Config
-	stateStore state.Store
-	decider    pdp.Decider
-	issuer     *executorauth.IssuerVerifier
-	audit      audit.Recorder
-	telemetry  telemetry.Recorder
+	config      Config
+	stateStore  state.Store
+	decider     pdp.Decider
+	issuer      *executorauth.IssuerVerifier
+	audit       audit.Recorder
+	telemetry   telemetry.Recorder
+	fastToolSet map[string]struct{}
 }
 
 type verifyExecutionRequest struct {
@@ -68,13 +71,23 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 		telemetryRecorder = telemetry.NopRecorder{}
 	}
 
+	fastToolSet := make(map[string]struct{}, len(config.FastAllowedTools))
+	for _, tool := range config.FastAllowedTools {
+		trimmed := strings.TrimSpace(tool)
+		if trimmed == "" {
+			continue
+		}
+		fastToolSet[trimmed] = struct{}{}
+	}
+
 	return &Service{
-		config:     config,
-		stateStore: stateStore,
-		decider:    decider,
-		issuer:     issuer,
-		audit:      auditRecorder,
-		telemetry:  telemetryRecorder,
+		config:      config,
+		stateStore:  stateStore,
+		decider:     decider,
+		issuer:      issuer,
+		audit:       auditRecorder,
+		telemetry:   telemetryRecorder,
+		fastToolSet: fastToolSet,
 	}
 }
 
@@ -82,6 +95,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/intercept/openai", s.handleOpenAIIntercept)
 	mux.HandleFunc("POST /v1/intercept/openai/stream", s.handleOpenAIStreamIntercept)
+	mux.HandleFunc("POST /v1/intercept/openai/stream/race", s.handleOpenAIStreamRaceIntercept)
 	mux.HandleFunc("POST /v1/intercept/anthropic", s.handleAnthropicIntercept)
 	mux.HandleFunc("POST /v1/intercept/framework/generic", s.handleGenericFrameworkIntercept)
 	mux.HandleFunc("POST /v1/intercept/framework/langchain", s.handleLangChainIntercept)
@@ -101,6 +115,7 @@ func (s *Service) handleOpenAIIntercept(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	envelope.Metadata.TraceID = traceIDForRequest(r, envelope.Metadata.TraceID)
 
 	s.handleOpenAIInterceptEnvelope(w, r, envelope)
 }
@@ -111,11 +126,65 @@ func (s *Service) handleOpenAIStreamIntercept(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	streamEnvelope.Metadata.TraceID = traceIDForRequest(r, streamEnvelope.Metadata.TraceID)
 
 	toolCall, err := translator.ReconstructOpenAIToolCall(streamEnvelope.Chunks, s.config.MaxParameterBytes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+
+	envelope := translator.OpenAIEnvelope{
+		Metadata:        streamEnvelope.Metadata,
+		AgentContext:    streamEnvelope.AgentContext,
+		RequiredContext: streamEnvelope.RequiredContext,
+		ToolCall:        toolCall,
+	}
+	s.handleOpenAIInterceptEnvelope(w, r, envelope)
+}
+
+func (s *Service) handleOpenAIStreamRaceIntercept(w http.ResponseWriter, r *http.Request) {
+	var streamEnvelope translator.OpenAIStreamEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &streamEnvelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	streamEnvelope.Metadata.TraceID = traceIDForRequest(r, streamEnvelope.Metadata.TraceID)
+	if len(streamEnvelope.Chunks) == 0 {
+		writeError(w, http.StatusBadRequest, translator.ErrEmptyStreamChunks)
+		return
+	}
+
+	assembler := translator.NewOpenAIToolCallAssembler(s.config.MaxParameterBytes)
+	permissionCh := make(chan error, 1)
+	permissionStarted := false
+
+	for _, chunk := range streamEnvelope.Chunks {
+		if err := assembler.AddChunk(chunk); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		toolName := assembler.ToolName()
+		if !permissionStarted && toolName != "" {
+			permissionStarted = true
+			go func(name string) {
+				permissionCh <- s.fastPermissionCheck(name)
+			}(toolName)
+		}
+	}
+
+	toolCall, err := assembler.Build()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if permissionStarted {
+		if err := <-permissionCh; err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
 	}
 
 	envelope := translator.OpenAIEnvelope{
@@ -167,6 +236,7 @@ func (s *Service) handleAnthropicIntercept(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	envelope.Metadata.TraceID = traceIDForRequest(r, envelope.Metadata.TraceID)
 
 	req, err := translator.NormalizeAnthropic(envelope, s.config.MaxParameterBytes)
 	if err != nil {
@@ -208,6 +278,7 @@ func (s *Service) handleGenericFrameworkIntercept(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	envelope.Metadata.TraceID = traceIDForRequest(r, envelope.Metadata.TraceID)
 
 	req, err := translator.NormalizeGenericFramework(envelope, s.config.MaxParameterBytes)
 	if err != nil {
@@ -224,6 +295,7 @@ func (s *Service) handleLangChainIntercept(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	envelope.Metadata.TraceID = traceIDForRequest(r, envelope.Metadata.TraceID)
 
 	req, err := translator.NormalizeLangChain(envelope, s.config.MaxParameterBytes)
 	if err != nil {
@@ -276,6 +348,7 @@ func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
 	start := time.Now()
+	req.Metadata.TraceID = traceIDForRequest(r, req.Metadata.TraceID)
 
 	var err error
 	if len(req.RequiredContext) > 0 {
@@ -318,6 +391,16 @@ func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (s *Service) fastPermissionCheck(toolName string) error {
+	if len(s.fastToolSet) == 0 {
+		return nil
+	}
+	if _, ok := s.fastToolSet[toolName]; ok {
+		return nil
+	}
+	return errors.New("tool denied by fast permission gate")
+}
+
 func (s *Service) recordDecision(ctx context.Context, req schema.CanonicalRequest, decision schema.Decision, startedAt time.Time) {
 	latency := time.Since(startedAt)
 	s.telemetry.ObserveDecision(req.ToolName, decision.Allow, latency)
@@ -328,6 +411,7 @@ func (s *Service) recordDecision(ctx context.Context, req schema.CanonicalReques
 	s.audit.Record(ctx, audit.Event{
 		DecisionID:    decision.DecisionID,
 		RequestID:     req.Metadata.RequestID,
+		TraceID:       req.Metadata.TraceID,
 		TenantID:      req.Metadata.TenantID,
 		ToolName:      req.ToolName,
 		Allow:         decision.Allow,
@@ -335,6 +419,13 @@ func (s *Service) recordDecision(ctx context.Context, req schema.CanonicalReques
 		PolicyVersion: decision.PolicyVersion,
 		Latency:       latency,
 	})
+}
+
+func traceIDForRequest(r *http.Request, current string) string {
+	if current != "" {
+		return current
+	}
+	return telemetry.TraceIDFromContext(r.Context())
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {
