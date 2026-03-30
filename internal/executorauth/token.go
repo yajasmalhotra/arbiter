@@ -16,6 +16,7 @@ import (
 var (
 	ErrInvalidToken   = errors.New("invalid token")
 	ErrReplayDetected = errors.New("token replay detected")
+	ErrMissingKeyID   = errors.New("missing signing key id")
 )
 
 type ReplayCache interface {
@@ -84,26 +85,53 @@ type Claims struct {
 }
 
 type IssuerVerifier struct {
-	secret []byte
-	issuer string
-	ttl    time.Duration
-	replay ReplayCache
-	now    func() time.Time
+	activeKeyID string
+	keys        map[string][]byte
+	issuer      string
+	ttl         time.Duration
+	replay      ReplayCache
+	now         func() time.Time
 }
 
 func NewIssuerVerifier(secret []byte, issuer string, ttl time.Duration, replay ReplayCache) *IssuerVerifier {
+	return NewIssuerVerifierWithKeys(map[string][]byte{"default": secret}, "default", issuer, ttl, replay)
+}
+
+func NewIssuerVerifierWithKeys(keys map[string][]byte, activeKeyID, issuer string, ttl time.Duration, replay ReplayCache) *IssuerVerifier {
 	if ttl <= 0 {
 		ttl = 2 * time.Minute
 	}
 	if replay == nil {
 		replay = NewMemoryReplayCache()
 	}
+	if activeKeyID == "" {
+		activeKeyID = "default"
+	}
+	normalizedKeys := make(map[string][]byte, len(keys))
+	for keyID, secret := range keys {
+		if keyID == "" || len(secret) == 0 {
+			continue
+		}
+		normalizedKeys[keyID] = secret
+	}
+	if len(normalizedKeys) == 0 {
+		normalizedKeys["default"] = []byte("dev-secret-change-me")
+		activeKeyID = "default"
+	}
+	if _, ok := normalizedKeys[activeKeyID]; !ok {
+		for keyID := range normalizedKeys {
+			activeKeyID = keyID
+			break
+		}
+	}
+
 	return &IssuerVerifier{
-		secret: secret,
-		issuer: issuer,
-		ttl:    ttl,
-		replay: replay,
-		now:    time.Now,
+		activeKeyID: activeKeyID,
+		keys:        normalizedKeys,
+		issuer:      issuer,
+		ttl:         ttl,
+		replay:      replay,
+		now:         time.Now,
 	}
 }
 
@@ -142,7 +170,9 @@ func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Deci
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(i.secret)
+	token.Header["kid"] = i.activeKeyID
+	secret := i.keys[i.activeKeyID]
+	return token.SignedString(secret)
 }
 
 func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.CanonicalRequest) (*Claims, error) {
@@ -157,7 +187,15 @@ func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.Ca
 		if parsedToken.Method != jwt.SigningMethodHS256 {
 			return nil, ErrInvalidToken
 		}
-		return i.secret, nil
+		keyID, _ := parsedToken.Header["kid"].(string)
+		if keyID == "" {
+			return nil, ErrMissingKeyID
+		}
+		secret, ok := i.keys[keyID]
+		if !ok {
+			return nil, ErrInvalidToken
+		}
+		return secret, nil
 	}, jwt.WithIssuer(i.issuer), jwt.WithAudience("arbiter-tool-execution"))
 	if err != nil {
 		span.RecordError(err)
