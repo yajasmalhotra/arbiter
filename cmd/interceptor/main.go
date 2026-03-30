@@ -12,6 +12,7 @@ import (
 	"arbiter/internal/interceptor"
 	"arbiter/internal/pdp"
 	"arbiter/internal/state"
+	"arbiter/internal/telemetry"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -34,6 +35,7 @@ func main() {
 		stateStore state.Store              = state.NewMemoryStore()
 		replay     executorauth.ReplayCache = executorauth.NewMemoryReplayCache()
 	)
+	metricsRecorder := telemetry.NewCounterRecorder()
 
 	if redisAddr := os.Getenv("ARBITER_REDIS_ADDR"); redisAddr != "" {
 		client := redis.NewClient(&redis.Options{
@@ -56,11 +58,12 @@ func main() {
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),
 		executorauth.NewIssuerVerifier([]byte(tokenSecret), tokenIssuer, tokenTTL, replay),
 		audit.NewLogRecorder(logger),
-		nil,
+		metricsRecorder,
 	)
 
 	mux := http.NewServeMux()
 	service.RegisterRoutes(mux)
+	mux.HandleFunc("GET /metrics", metricsRecorder.Handler())
 
 	server := &http.Server{
 		Addr:              addr,

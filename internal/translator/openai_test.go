@@ -86,3 +86,45 @@ func TestNormalizeOpenAIRejectsUnsupportedType(t *testing.T) {
 		t.Fatalf("expected unsupported tool type error, got %v", err)
 	}
 }
+
+func TestReconstructOpenAIToolCall(t *testing.T) {
+	t.Parallel()
+
+	toolCall, err := ReconstructOpenAIToolCall([]OpenAIToolCallChunk{
+		{ID: "call-1", Type: "function", FunctionName: "send_slack_message", ArgumentsDelta: `{"channel":"`},
+		{ArgumentsDelta: `ops","message":"`},
+		{ArgumentsDelta: `hello"}`},
+	}, 1024)
+	if err != nil {
+		t.Fatalf("reconstruct: %v", err)
+	}
+
+	if toolCall.Function.Name != "send_slack_message" {
+		t.Fatalf("unexpected function name: %s", toolCall.Function.Name)
+	}
+	if toolCall.Function.Arguments != `{"channel":"ops","message":"hello"}` {
+		t.Fatalf("unexpected arguments: %s", toolCall.Function.Arguments)
+	}
+}
+
+func TestReconstructOpenAIToolCallRejectsMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	_, err := ReconstructOpenAIToolCall([]OpenAIToolCallChunk{
+		{Type: "function", FunctionName: "send_slack_message", ArgumentsDelta: `{"channel":"ops"`},
+	}, 1024)
+	if err == nil {
+		t.Fatal("expected malformed streamed arguments error")
+	}
+}
+
+func TestReconstructOpenAIToolCallRejectsOversizedPayload(t *testing.T) {
+	t.Parallel()
+
+	_, err := ReconstructOpenAIToolCall([]OpenAIToolCallChunk{
+		{Type: "function", FunctionName: "send_slack_message", ArgumentsDelta: `{"message":"abcdefghijklmnopqrstuvwxyz"}`},
+	}, 10)
+	if err == nil {
+		t.Fatal("expected oversized streamed argument error")
+	}
+}

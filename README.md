@@ -68,8 +68,12 @@ flowchart LR
 
 - `GET /healthz`: lightweight health endpoint.
 - `POST /v1/intercept/openai`: normalize an OpenAI-style tool call, enrich context, evaluate policy, and return a signed decision token on allow.
+- `POST /v1/intercept/openai/stream`: reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
+- `POST /v1/intercept/anthropic`: normalize an Anthropic tool-use payload and run the same deterministic policy/token flow.
 - `POST /v1/execute/verify/openai`: verify a signed token against the normalized execution request and reject replay.
+- `POST /v1/execute/verify/anthropic`: verify a signed token for Anthropic-normalized execution requests.
 - `POST /v1/state/actions`: record prior actions used for sequence-aware policy checks.
+- `GET /metrics`: expose low-overhead in-process counters in Prometheus text format.
 
 ## Planned Repository Shape
 
@@ -127,8 +131,8 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Add streaming chunk reconstruction for LiteLLM-style tool-call deltas.
-2. Add Anthropic- and framework-style translator adapters on top of the canonical schema.
-3. Replace the minimal telemetry layer with exported metrics and traces.
+1. Add framework-style translator adapters on top of the canonical schema.
+2. Add true chunk-by-chunk streaming race orchestration with early deny behavior.
+3. Add tracing across intercept, PDP, token issue, and token verify paths.
 4. Expand policy coverage and automate `opa test` in CI.
 5. Build the governance control plane.
