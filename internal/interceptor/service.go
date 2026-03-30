@@ -37,6 +37,11 @@ type verifyExecutionRequest struct {
 	Envelope translator.OpenAIEnvelope `json:"envelope"`
 }
 
+type verifyAnthropicExecutionRequest struct {
+	Token    string                       `json:"token"`
+	Envelope translator.AnthropicEnvelope `json:"envelope"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }
@@ -71,7 +76,10 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/intercept/openai", s.handleOpenAIIntercept)
+	mux.HandleFunc("POST /v1/intercept/openai/stream", s.handleOpenAIStreamIntercept)
+	mux.HandleFunc("POST /v1/intercept/anthropic", s.handleAnthropicIntercept)
 	mux.HandleFunc("POST /v1/execute/verify/openai", s.handleOpenAIVerify)
+	mux.HandleFunc("POST /v1/execute/verify/anthropic", s.handleAnthropicVerify)
 	mux.HandleFunc("POST /v1/state/actions", s.handleRecordAction)
 }
 
@@ -80,20 +88,131 @@ func (s *Service) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Service) handleOpenAIIntercept(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-
 	var envelope translator.OpenAIEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	req, err := translator.NormalizeOpenAI(envelope, s.config.MaxParameterBytes)
+	s.handleOpenAIInterceptEnvelope(w, r, envelope)
+}
+
+func (s *Service) handleOpenAIStreamIntercept(w http.ResponseWriter, r *http.Request) {
+	var streamEnvelope translator.OpenAIStreamEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &streamEnvelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	toolCall, err := translator.ReconstructOpenAIToolCall(streamEnvelope.Chunks, s.config.MaxParameterBytes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
+	envelope := translator.OpenAIEnvelope{
+		Metadata:        streamEnvelope.Metadata,
+		AgentContext:    streamEnvelope.AgentContext,
+		RequiredContext: streamEnvelope.RequiredContext,
+		ToolCall:        toolCall,
+	}
+	s.handleOpenAIInterceptEnvelope(w, r, envelope)
+}
+
+func (s *Service) handleOpenAIInterceptEnvelope(w http.ResponseWriter, r *http.Request, envelope translator.OpenAIEnvelope) {
+	req, err := translator.NormalizeOpenAI(envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.handleCanonicalIntercept(w, r, req)
+}
+
+func (s *Service) handleOpenAIVerify(w http.ResponseWriter, r *http.Request) {
+	var reqBody verifyExecutionRequest
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	req, err := translator.NormalizeOpenAI(reqBody.Envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if _, err := s.issuer.Verify(r.Context(), reqBody.Token, req); err != nil {
+		status := http.StatusForbidden
+		if !errors.Is(err, executorauth.ErrInvalidToken) && !errors.Is(err, executorauth.ErrReplayDetected) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+}
+
+func (s *Service) handleAnthropicIntercept(w http.ResponseWriter, r *http.Request) {
+	var envelope translator.AnthropicEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	req, err := translator.NormalizeAnthropic(envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	s.handleCanonicalIntercept(w, r, req)
+}
+
+func (s *Service) handleAnthropicVerify(w http.ResponseWriter, r *http.Request) {
+	var reqBody verifyAnthropicExecutionRequest
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	req, err := translator.NormalizeAnthropic(reqBody.Envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if _, err := s.issuer.Verify(r.Context(), reqBody.Token, req); err != nil {
+		status := http.StatusForbidden
+		if !errors.Is(err, executorauth.ErrInvalidToken) && !errors.Is(err, executorauth.ErrReplayDetected) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+}
+
+func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
+	var record state.ActionRecord
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &record); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if err := s.stateStore.RecordAction(r.Context(), record); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "recorded"})
+}
+
+func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
+	start := time.Now()
+
+	var err error
 	if len(req.RequiredContext) > 0 {
 		req.PreviousActions, err = s.stateStore.RecentActions(r.Context(), state.LookupRequest{
 			TenantID:  req.Metadata.TenantID,
@@ -132,46 +251,6 @@ func (s *Service) handleOpenAIIntercept(w http.ResponseWriter, r *http.Request) 
 		Decision: decision,
 		Token:    token,
 	})
-}
-
-func (s *Service) handleOpenAIVerify(w http.ResponseWriter, r *http.Request) {
-	var reqBody verifyExecutionRequest
-	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-
-	req, err := translator.NormalizeOpenAI(reqBody.Envelope, s.config.MaxParameterBytes)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-
-	if _, err := s.issuer.Verify(r.Context(), reqBody.Token, req); err != nil {
-		status := http.StatusForbidden
-		if !errors.Is(err, executorauth.ErrInvalidToken) && !errors.Is(err, executorauth.ErrReplayDetected) {
-			status = http.StatusServiceUnavailable
-		}
-		writeError(w, status, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
-}
-
-func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
-	var record state.ActionRecord
-	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &record); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-
-	if err := s.stateStore.RecordAction(r.Context(), record); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "recorded"})
 }
 
 func (s *Service) recordDecision(ctx context.Context, req schema.CanonicalRequest, decision schema.Decision, startedAt time.Time) {
