@@ -15,6 +15,9 @@ import (
 	"arbiter/internal/state"
 	"arbiter/internal/telemetry"
 	"arbiter/internal/translator"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Config struct {
@@ -349,26 +352,36 @@ func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
 	start := time.Now()
 	req.Metadata.TraceID = traceIDForRequest(r, req.Metadata.TraceID)
+	ctx, span := otel.Tracer("arbiter/interceptor").Start(r.Context(), "interceptor.decision")
+	span.SetAttributes(
+		attribute.String("request_id", req.Metadata.RequestID),
+		attribute.String("trace_id", req.Metadata.TraceID),
+		attribute.String("tenant_id", req.Metadata.TenantID),
+		attribute.String("tool_name", req.ToolName),
+	)
+	defer span.End()
 
 	var err error
 	if len(req.RequiredContext) > 0 {
-		req.PreviousActions, err = s.stateStore.RecentActions(r.Context(), state.LookupRequest{
+		req.PreviousActions, err = s.stateStore.RecentActions(ctx, state.LookupRequest{
 			TenantID:  req.Metadata.TenantID,
 			ActorID:   req.AgentContext.Actor.ID,
 			SessionID: req.Metadata.SessionID,
 			Limit:     s.config.StateLookupLimit,
 		})
 		if err != nil {
+			span.RecordError(err)
 			writeError(w, http.StatusServiceUnavailable, err)
 			return
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.config.DecisionTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.config.DecisionTimeout)
 	defer cancel()
 
 	decision, err := s.decider.Decide(ctx, req)
 	if err != nil {
+		span.RecordError(err)
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, pdp.ErrDeniedByPolicy) {
 			status = http.StatusForbidden
@@ -380,6 +393,7 @@ func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Reques
 
 	token, err := s.issuer.Issue(req, decision)
 	if err != nil {
+		span.RecordError(err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -49,6 +49,9 @@ func TestCounterRecorderHandler(t *testing.T) {
 	if !strings.Contains(body, "arbiter_decisions_total 1") {
 		t.Fatalf("missing total metric: %s", body)
 	}
+	if !strings.Contains(body, "arbiter_decision_latency_bucket") {
+		t.Fatalf("missing latency histogram metric: %s", body)
+	}
 	if !strings.Contains(body, `arbiter_tool_decisions_allow_total{tool_name="run_sql_query"} 1`) {
 		t.Fatalf("missing per-tool metric: %s", body)
 	}

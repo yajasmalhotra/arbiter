@@ -9,6 +9,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var (
@@ -106,8 +108,17 @@ func NewIssuerVerifier(secret []byte, issuer string, ttl time.Duration, replay R
 }
 
 func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Decision) (string, error) {
+	_, span := otel.Tracer("arbiter/executorauth").Start(context.Background(), "token.issue")
+	span.SetAttributes(
+		attribute.String("tool_name", req.ToolName),
+		attribute.String("tenant_id", req.Metadata.TenantID),
+		attribute.String("decision_id", decision.DecisionID),
+	)
+	defer span.End()
+
 	requestHash, err := req.Hash()
 	if err != nil {
+		span.RecordError(err)
 		return "", err
 	}
 
@@ -135,6 +146,13 @@ func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Deci
 }
 
 func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.CanonicalRequest) (*Claims, error) {
+	ctx, span := otel.Tracer("arbiter/executorauth").Start(ctx, "token.verify")
+	span.SetAttributes(
+		attribute.String("tool_name", req.ToolName),
+		attribute.String("tenant_id", req.Metadata.TenantID),
+	)
+	defer span.End()
+
 	parsedToken, err := jwt.ParseWithClaims(token, &Claims{}, func(parsedToken *jwt.Token) (any, error) {
 		if parsedToken.Method != jwt.SigningMethodHS256 {
 			return nil, ErrInvalidToken
@@ -142,33 +160,40 @@ func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.Ca
 		return i.secret, nil
 	}, jwt.WithIssuer(i.issuer), jwt.WithAudience("arbiter-tool-execution"))
 	if err != nil {
+		span.RecordError(err)
 		return nil, ErrInvalidToken
 	}
 
 	claims, ok := parsedToken.Claims.(*Claims)
 	if !ok || !parsedToken.Valid {
+		span.RecordError(ErrInvalidToken)
 		return nil, ErrInvalidToken
 	}
 
 	requestHash, err := req.Hash()
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
 	if claims.RequestHash != requestHash || claims.TenantID != req.Metadata.TenantID || claims.ActorID != req.AgentContext.Actor.ID || claims.ToolName != req.ToolName {
+		span.RecordError(ErrInvalidToken)
 		return nil, ErrInvalidToken
 	}
 
 	ttl := time.Until(claims.ExpiresAt.Time)
 	if ttl <= 0 {
+		span.RecordError(ErrInvalidToken)
 		return nil, ErrInvalidToken
 	}
 
 	ok, err = i.replay.MarkUsed(ctx, claims.ID, ttl)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 	if !ok {
+		span.RecordError(ErrReplayDetected)
 		return nil, ErrReplayDetected
 	}
 
