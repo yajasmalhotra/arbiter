@@ -136,7 +136,8 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Expand policy coverage for edge and abuse cases.
-2. Build the governance control plane.
-3. Add end-to-end integration tests for OPA, Redis, and replay protection.
-4. Add distributed trace export plumbing.
+1. Add edge-case and adversarial policy fixtures.
+2. Add end-to-end integration tests for OPA, Redis, and replay protection.
+3. Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
+4. Build the governance control plane MVP.
+5. Add signing-key rotation hardening and pilot readiness verification.

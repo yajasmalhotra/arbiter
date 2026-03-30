@@ -152,3 +152,13 @@ The next code changes should usually start here:
 2. `apps/control-plane/` for governance workflows and simulation.
 3. End-to-end integration tests that exercise OPA, Redis, and replay protection together.
 4. Distributed tracing export plumbing (OTLP) on top of current trace propagation.
+
+## Production Pilot Sequence
+
+Execute these steps in order. After each step, update this section and `README.md` immediate next steps, then push.
+
+- [ ] Step 1: Add edge-case and adversarial policy fixtures in `policy/tests/`.
+- [ ] Step 2: Add end-to-end integration tests for OPA, Redis, and replay protection.
+- [ ] Step 3: Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
+- [ ] Step 4: Build control-plane MVP for policy/data CRUD, rollout states, and audit views.
+- [ ] Step 5: Add key rotation hardening and pilot readiness verification checklist.
