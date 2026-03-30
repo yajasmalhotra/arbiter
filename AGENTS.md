@@ -162,4 +162,4 @@ Execute these steps in order. After each step, update this section and `README.m
 - [x] Step 2: Add end-to-end integration tests for OPA, Redis, and replay protection.
 - [x] Step 3: Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
 - [x] Step 4: Build control-plane MVP for policy/data CRUD, rollout states, and audit views.
-- [ ] Step 5: Add key rotation hardening and pilot readiness verification checklist.
+- [x] Step 5: Add key rotation hardening and pilot readiness verification checklist.

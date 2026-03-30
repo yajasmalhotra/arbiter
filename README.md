@@ -136,4 +136,5 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Add signing-key rotation hardening and pilot readiness verification.
+1. Run pilot soak testing in the target environment with real tool traffic.
+2. Validate alerting and dashboards against live SLO thresholds.

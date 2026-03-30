@@ -26,6 +26,8 @@ func main() {
 	opaURL := getEnv("ARBITER_OPA_URL", "http://localhost:8181")
 	opaPath := getEnv("ARBITER_OPA_PATH", "/v1/data/arbiter/authz/decision")
 	tokenSecret := getEnv("ARBITER_TOKEN_SECRET", "dev-secret-change-me")
+	tokenActiveKeyID := getEnv("ARBITER_TOKEN_ACTIVE_KID", "default")
+	tokenKeys := getKeySetEnv("ARBITER_TOKEN_KEYS")
 	tokenIssuer := getEnv("ARBITER_TOKEN_ISSUER", "arbiter")
 	tokenTTL := getDurationEnv("ARBITER_TOKEN_TTL", 2*time.Minute)
 	decisionTimeout := getDurationEnv("ARBITER_DECISION_TIMEOUT", 1500*time.Millisecond)
@@ -77,7 +79,7 @@ func main() {
 		},
 		stateStore,
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),
-		executorauth.NewIssuerVerifier([]byte(tokenSecret), tokenIssuer, tokenTTL, replay),
+		newIssuerVerifier(tokenSecret, tokenKeys, tokenActiveKeyID, tokenIssuer, tokenTTL, replay),
 		audit.NewLogRecorder(logger),
 		metricsRecorder,
 	)
@@ -173,4 +175,37 @@ func getBoolEnv(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func getKeySetEnv(key string) map[string][]byte {
+	value := os.Getenv(key)
+	if value == "" {
+		return nil
+	}
+
+	pairs := strings.Split(value, ",")
+	keys := make(map[string][]byte, len(pairs))
+	for _, pair := range pairs {
+		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		keyID := strings.TrimSpace(parts[0])
+		secret := strings.TrimSpace(parts[1])
+		if keyID == "" || secret == "" {
+			continue
+		}
+		keys[keyID] = []byte(secret)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return keys
+}
+
+func newIssuerVerifier(singleSecret string, keySet map[string][]byte, activeKeyID, issuer string, ttl time.Duration, replay executorauth.ReplayCache) *executorauth.IssuerVerifier {
+	if len(keySet) == 0 {
+		return executorauth.NewIssuerVerifier([]byte(singleSecret), issuer, ttl, replay)
+	}
+	return executorauth.NewIssuerVerifierWithKeys(keySet, activeKeyID, issuer, ttl, replay)
 }
