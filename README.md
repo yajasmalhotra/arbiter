@@ -136,6 +136,5 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Immediate Next Steps
 
-1. Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
-2. Build the governance control plane MVP.
-3. Add signing-key rotation hardening and pilot readiness verification.
+1. Build the governance control plane MVP.
+2. Add signing-key rotation hardening and pilot readiness verification.

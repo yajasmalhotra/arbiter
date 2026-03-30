@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,6 +33,23 @@ func main() {
 	maxParameterBytes := getIntEnv("ARBITER_MAX_PARAMETER_BYTES", 32<<10)
 	stateLookupLimit := getIntEnv("ARBITER_STATE_LOOKUP_LIMIT", 10)
 	fastAllowedTools := getCSVEnv("ARBITER_FAST_ALLOWED_TOOLS")
+	otelEnabled := getBoolEnv("ARBITER_OTEL_ENABLED", false)
+	otelEndpoint := getEnv("ARBITER_OTEL_ENDPOINT", "")
+	otelInsecure := getBoolEnv("ARBITER_OTEL_INSECURE", true)
+
+	shutdownTracing, err := telemetry.InitOTel(context.Background(), telemetry.OTelConfig{
+		Enabled:     otelEnabled,
+		Endpoint:    otelEndpoint,
+		ServiceName: "arbiter-interceptor",
+		Insecure:    otelInsecure,
+	})
+	if err != nil {
+		logger.Error("failed to initialize tracing", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		_ = shutdownTracing(context.Background())
+	}()
 
 	var (
 		stateStore state.Store              = state.NewMemoryStore()
@@ -142,4 +160,17 @@ func getCSVEnv(key string) []string {
 		values = append(values, trimmed)
 	}
 	return values
+}
+
+func getBoolEnv(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
