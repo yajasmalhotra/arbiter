@@ -1,0 +1,34 @@
+{
+  "config": {
+    "policy_version": "v1",
+    "data_revision": "local-dev"
+  },
+  "tools": {
+    "send_slack_message": {
+      "domain": "slack"
+    },
+    "run_sql_query": {
+      "domain": "sql"
+    },
+    "backup_database": {
+      "domain": "sql"
+    },
+    "delete_backup": {
+      "domain": "sql"
+    },
+    "create_stripe_refund": {
+      "domain": "stripe"
+    }
+  },
+  "domain_config": {
+    "slack": {
+      "allowed_channels": [
+        "ops",
+        "security"
+      ]
+    },
+    "stripe": {
+      "max_refund_cents": 500000
+    }
+  }
+}
