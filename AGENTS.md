@@ -21,6 +21,24 @@ Build a Go-first hot-path enforcement system that intercepts tool calls, normali
 - `control-plane`: Next.js app for policy/data management, audit review, and rollout workflows.
 - `audit` and `telemetry`: structured logging, metrics, traces, and latency budget reporting.
 
+## Target Architecture Diagram
+
+```mermaid
+flowchart LR
+    client[ClientOrAgent] --> gateway[LiteLLMProxy]
+    gateway --> interceptor[GoInterceptor]
+    interceptor --> translator[CanonicalTranslator]
+    translator --> stateCtx[StateEnricher]
+    stateCtx --> redis[RedisStateStore]
+    translator --> pdp[OPASidecar]
+    translator --> intent[IntentLabelerShadow]
+    pdp --> token[SignedAllowToken]
+    token --> executorAuth[ExecutorVerifier]
+    executorAuth --> toolExec[ToolExecutor]
+    interceptor --> audit[AuditAndTelemetry]
+    executorAuth --> audit
+```
+
 ## Non-Negotiable Invariants
 
 - No tool executes without a valid signed allow token.
@@ -157,7 +175,6 @@ The next code changes should usually start here:
 
 Execute these steps in order. After each step, update this section and `README.md` immediate next steps, then push.
 
-- [ ] Step 1: Add edge-case and adversarial policy fixtures in `policy/tests/`.
 - [x] Step 1: Add edge-case and adversarial policy fixtures in `policy/tests/`.
 - [x] Step 2: Add end-to-end integration tests for OPA, Redis, and replay protection.
 - [x] Step 3: Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
