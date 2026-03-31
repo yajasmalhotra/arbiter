@@ -1,115 +1,143 @@
 # Arbiter
 
-Arbiter is a deterministic governance layer for LLM agent tool execution.
-It sits between an agent runtime and the tools that agent wants to call, normalizes provider-specific tool-call payloads into a canonical schema, evaluates policy with Open Policy Agent (OPA), and only allows execution when a short-lived signed policy token is present and valid.
+Arbiter is a deterministic governance layer for LLM agent tool execution. It sits between an agent runtime (like LiteLLM, LangChain, or direct OpenAI/Anthropic calls) and the tools that agent wants to call. 
 
-The product goal is simple: agent reasoning can stay probabilistic, but tool execution must be deterministic.
+The product goal is simple: **Agent reasoning can stay probabilistic, but tool execution must be deterministic.**
 
-## Status
+Instead of relying on an LLM to "judge" if an action is safe, Arbiter normalizes tool-call payloads into a canonical schema, evaluates them against strict Rego policies using Open Policy Agent (OPA), and only allows execution when a short-lived, cryptographically signed policy token is present and valid.
 
-The initial backend MVP is implemented. The repository now includes a Go interception service, canonical request normalization, OPA decision integration, signed execution-token verification, state enrichment, initial Rego policies, unit tests, and a local Docker stack for OPA and Redis.
+## Why Arbiter?
 
-## MVP Principles
+When deploying LLM agents to production, you cannot trust the LLM to police its own tool usage. Prompt injection, hallucinations, and probabilistic reasoning make "LLM-as-a-judge" guardrails unsafe for destructive actions (like `DROP TABLE` or issuing refunds).
 
-- Deterministic enforcement first.
-- Fail closed on OPA or token verification failure.
-- Keep the intent labeler in shadow mode until latency and quality are proven.
-- Use temporal context only for policies that require prior-action state.
-- Keep the control plane off the request hot path.
+Arbiter provides:
+- **Deterministic Enforcement:** Uses OPA and Rego policies. If a rule says "No refunds over $5,000", the LLM cannot bypass it.
+- **Cryptographic Trust:** Issues short-lived, signed JWTs for allowed actions. The tool executor verifies the token, ensuring the request wasn't tampered with.
+- **Replay Protection:** Tokens are bound to the request hash and can only be used once.
+- **Multi-Provider Support:** Normalizes OpenAI, Anthropic, and generic framework payloads into a single canonical schema.
+- **Sequence-Aware Policies:** Integrates with Redis to enforce rules like "You can only delete a database if you backed it up in the last 5 minutes."
 
-## Target Architecture
+## Quick Start
 
-```mermaid
-flowchart LR
-    client[ClientOrAgent] --> gateway[LiteLLMProxy]
-    gateway --> interceptor[GoInterceptor]
-    interceptor --> translator[CanonicalTranslator]
-    translator --> stateCtx[StateEnricher]
-    stateCtx --> redis[RedisStateStore]
-    translator --> pdp[OPASidecar]
-    translator --> intent[IntentLabelerShadow]
-    pdp --> token[SignedAllowToken]
-    token --> executorAuth[ExecutorVerifier]
-    executorAuth --> toolExec[ToolExecutor]
-    interceptor --> audit[AuditAndTelemetry]
-    executorAuth --> audit
+### 1. Run the Stack Locally
+
+Arbiter requires OPA and Redis to run. You can spin up the entire stack using Docker Compose:
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build -d
 ```
 
-## Planned Services
+This starts:
+- **Arbiter** on `http://localhost:8080`
+- **OPA** on `http://localhost:8181` (with policies mounted from `policy/`)
+- **Redis** on `localhost:6379`
 
-### `interceptor`
-- Go service on the hot path.
-- Reconstructs streaming tool calls.
-- Runs early tool-name checks and full argument validation.
-- Denies malformed or disallowed calls before execution.
+### 2. Test an Allowed Action
 
-### `pdp`
-- Local OPA sidecar and Go client integration.
-- Evaluates core and domain Rego policies.
-- Returns allow or deny decisions and supports signed allow-token flow.
+Let's simulate an LLM trying to send a Slack message to the `#ops` channel. Our default policy allows this.
 
-### `executorauth`
-- Verifies signed allow tokens at execution time.
-- Enforces request-hash binding, expiry, signer trust, and replay protection.
-
-### `state`
-- Enriches requests with temporal context from Redis.
-- Supports sequence-aware policies such as "delete only after backup."
-
-### `intent`
-- Optional semantic labeler for shadow evaluation.
-- Measures classification quality and latency before any enforcement role.
-
-### `control-plane`
-- Next.js application for policy data CRUD, audit review, and shadow simulation.
-- Manages rollout states such as `draft`, `shadow`, `canary`, and `enforced`.
-
-## Current API Surface
-
-- `GET /healthz`: lightweight health endpoint.
-- `POST /v1/intercept/openai`: normalize an OpenAI-style tool call, enrich context, evaluate policy, and return a signed decision token on allow.
-- `POST /v1/intercept/openai/stream`: reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
-- `POST /v1/intercept/openai/stream/race`: run a chunk-phase stream intercept path with fast early deny checks before full decisioning.
-- `POST /v1/intercept/anthropic`: normalize an Anthropic tool-use payload and run the same deterministic policy/token flow.
-- `POST /v1/intercept/framework/generic`: accept framework-native payloads with explicit tool name and parameters.
-- `POST /v1/intercept/framework/langchain`: normalize LangChain-style tool invocation payloads.
-- `POST /v1/execute/verify/openai`: verify a signed token against the normalized execution request and reject replay.
-- `POST /v1/execute/verify/anthropic`: verify a signed token for Anthropic-normalized execution requests.
-- `POST /v1/execute/verify/canonical`: verify a signed token against a canonical request payload.
-- `POST /v1/state/actions`: record prior actions used for sequence-aware policy checks.
-- `GET /metrics`: expose low-overhead in-process counters in Prometheus text format.
-- `X-Arbiter-Trace-ID`: propagated request trace identifier returned on responses and injected into decision metadata.
-
-## Planned Repository Shape
-
-```text
-cmd/interceptor/
-internal/schema/
-internal/translator/
-internal/pdp/
-internal/executorauth/
-internal/state/
-internal/intent/
-internal/audit/
-internal/telemetry/
-policy/core/
-policy/domain/
-policy/data/
-policy/tests/
-apps/control-plane/
-deploy/docker-compose.yml
-deploy/helm/
+```bash
+curl -s -X POST http://localhost:8080/v1/intercept/openai \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "metadata": {"request_id": "demo-1", "tenant_id": "tenant-demo"},
+    "agent_context": {"actor": {"id": "user-1"}},
+    "tool_call": {
+      "type": "function",
+      "function": {
+        "name": "send_slack_message",
+        "arguments": "{\"channel\":\"ops\",\"message\":\"Deploy finished\"}"
+      }
+    }
+  }'
 ```
 
-## Delivery Order
+**Response:**
+You will receive an HTTP 200 with `"allow": true` and a signed JWT `token`. Your application should extract this token and pass it to the tool executor.
 
-1. Define the canonical schema, decision contract, and signed-token claims.
-2. Implement the OPA integration and deterministic policy path.
-3. Add execution-time token verification and replay protection.
-4. Build the LiteLLM-first streaming interceptor.
-5. Add Redis-backed temporal context enrichment.
-6. Build the control plane and policy rollout workflow.
-7. Add the intent labeler in shadow mode.
+### 3. Test a Denied Action
+
+Now let's simulate the LLM trying to drop a database table. Our default policy explicitly denies destructive SQL.
+
+```bash
+curl -s -X POST http://localhost:8080/v1/intercept/openai \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "metadata": {"request_id": "demo-2", "tenant_id": "tenant-demo"},
+    "agent_context": {"actor": {"id": "user-1"}},
+    "tool_call": {
+      "type": "function",
+      "function": {
+        "name": "run_sql_query",
+        "arguments": "{\"query\":\"DROP TABLE users;\"}"
+      }
+    }
+  }'
+```
+
+**Response:**
+You will receive an HTTP 403 Forbidden with `"allow": false` and no token. The action is blocked deterministically.
+
+### 4. Verify the Token at Execution Time
+
+Before your actual tool (e.g., your Slack integration) executes the action, it must verify the token with Arbiter to ensure it is valid, hasn't expired, and hasn't been replayed.
+
+```bash
+curl -s -X POST http://localhost:8080/v1/execute/verify/openai \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "token": "<PASTE_TOKEN_FROM_STEP_2>",
+    "envelope": {
+      "metadata": {"request_id": "demo-1", "tenant_id": "tenant-demo"},
+      "agent_context": {"actor": {"id": "user-1"}},
+      "tool_call": {
+        "type": "function",
+        "function": {
+          "name": "send_slack_message",
+          "arguments": "{\"channel\":\"ops\",\"message\":\"Deploy finished\"}"
+        }
+      }
+    }
+  }'
+```
+
+If successful, Arbiter returns `{"status": "verified"}`. If you run this exact same command again, Arbiter will return a 403 `token replay detected` error.
+
+## API Surface
+
+- `GET /healthz`: Lightweight health endpoint.
+- `GET /metrics`: Exposes low-overhead in-process counters in Prometheus text format.
+- `POST /v1/intercept/openai`: Normalize an OpenAI-style tool call, evaluate policy, and return a signed token on allow.
+- `POST /v1/intercept/openai/stream`: Reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
+- `POST /v1/intercept/anthropic`: Normalize an Anthropic tool-use payload.
+- `POST /v1/intercept/framework/generic`: Accept framework-native payloads.
+- `POST /v1/execute/verify/openai`: Verify a signed token against the normalized execution request and reject replays.
+- `POST /v1/execute/verify/anthropic`: Verify a signed token for Anthropic-normalized requests.
+- `POST /v1/state/actions`: Record prior actions used for sequence-aware policy checks.
+
+## Writing Policies
+
+Policies are written in Rego and evaluated by OPA. 
+- **Core policies** (like schema validation and global invariants) live in `policy/core/`.
+- **Domain policies** (like Slack channel allowlists or Stripe refund caps) live in `policy/domain/`.
+- **Policy data** (configuration values like the actual refund cap amount) live in `policy/data/config.json`.
+
+To test policies locally:
+```bash
+go test ./...
+docker run --rm -v $(pwd)/policy:/policy:ro openpolicyagent/opa:0.69.0 test /policy/core /policy/domain /policy/tests /policy/data -v
+```
+
+## Control Plane UI
+
+Arbiter includes a Next.js application for policy data CRUD, audit review, and shadow simulation.
+
+```bash
+cd apps/control-plane
+npm install
+npm run dev
+```
+Open `http://localhost:3000` to view the dashboard.
 
 ## Security Invariants
 
@@ -117,24 +145,4 @@ deploy/helm/
 - The executor must verify the token, not just the interceptor.
 - Unknown or malformed provider payloads are denied unless they normalize cleanly.
 - Missing required temporal context causes a deny for policies that depend on it.
-- Every decision must be traceable by decision ID, policy version, and data revision.
-
-## Testing Expectations
-
-- Unit tests for each Go package with logic.
-- Golden fixtures for canonical translation.
-- `opa test` coverage for policy modules.
-- Replay tests for historical decisions.
-- Load and chaos tests for hot-path dependencies.
-
-## Local Development
-
-```bash
-go test ./...
-docker compose -f deploy/docker-compose.yml up --build
-```
-
-## Immediate Next Steps
-
-1. Run pilot soak testing in the target environment with real tool traffic.
-2. Validate alerting and dashboards against live SLO thresholds.
+- Every decision is traceable by decision ID, policy version, and data revision.
