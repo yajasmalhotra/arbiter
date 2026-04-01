@@ -34,6 +34,8 @@ This starts:
 - **OPA** on `http://localhost:8181` (polling `GET /api/bundles/channels/prod/artifact` from the control-plane)
 - **Redis** on `localhost:6379`
 
+By default in `deploy/docker-compose.yml`, Arbiter also writes decision audit events into Postgres (`audit_events`) via `ARBITER_AUDIT_POSTGRES_DSN`.
+
 Optional **LiteLLM proxy** on `http://localhost:4000` (for client-style harness tests): set `OPENAI_API_KEY`, then run `docker compose -f deploy/docker-compose.yml --profile litellm up -d --build` (see [LiteLLM manual harness](#litellm-manual-harness)).
 
 ### 2. Test an Allowed Action

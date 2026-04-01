@@ -174,6 +174,7 @@ When adding a new service or package:
 - [x] Wire local Docker runtime for control-plane + Postgres + OPA bundle polling via service-token authentication.
 - [x] Add control-plane service-token management APIs (list/create/revoke) with hashed token storage.
 - [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
+- [x] Add optional non-blocking Postgres audit sink fan-out for interceptor decision events.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 

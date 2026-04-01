@@ -40,6 +40,8 @@ func main() {
 	otelEnabled := getBoolEnv("ARBITER_OTEL_ENABLED", false)
 	otelEndpoint := getEnv("ARBITER_OTEL_ENDPOINT", "")
 	otelInsecure := getBoolEnv("ARBITER_OTEL_INSECURE", true)
+	auditPostgresDSN := getEnv("ARBITER_AUDIT_POSTGRES_DSN", "")
+	auditPostgresQueue := getIntEnv("ARBITER_AUDIT_POSTGRES_QUEUE", 1024)
 
 	shutdownTracing, err := telemetry.InitOTel(context.Background(), telemetry.OTelConfig{
 		Enabled:     otelEnabled,
@@ -60,6 +62,7 @@ func main() {
 		replay     executorauth.ReplayCache = executorauth.NewMemoryReplayCache()
 	)
 	metricsRecorder := telemetry.NewCounterRecorder()
+	var auditRecorder audit.Recorder = audit.NewLogRecorder(logger)
 
 	if redisAddr := os.Getenv("ARBITER_REDIS_ADDR"); redisAddr != "" {
 		client := redis.NewClient(&redis.Options{
@@ -69,6 +72,22 @@ func main() {
 		})
 		stateStore = state.NewRedisStore(client, "arbiter:actions", 50)
 		replay = executorauth.NewRedisReplayCache(client, "arbiter:replay")
+	}
+
+	if strings.TrimSpace(auditPostgresDSN) != "" {
+		pgAuditRecorder, err := audit.NewPostgresRecorder(context.Background(), auditPostgresDSN, auditPostgresQueue, logger)
+		if err != nil {
+			logger.Error("failed to initialize postgres audit recorder", "error", err)
+			os.Exit(1)
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := pgAuditRecorder.Close(shutdownCtx); err != nil {
+				logger.Error("failed to close postgres audit recorder", "error", err)
+			}
+		}()
+		auditRecorder = audit.NewMultiRecorder(auditRecorder, pgAuditRecorder)
 	}
 
 	service := interceptor.NewService(
@@ -84,7 +103,7 @@ func main() {
 		stateStore,
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),
 		newIssuerVerifier(tokenSecret, tokenKeys, tokenActiveKeyID, tokenIssuer, tokenTTL, replay),
-		audit.NewLogRecorder(logger),
+		auditRecorder,
 		metricsRecorder,
 	)
 

@@ -37,6 +37,8 @@ services:
       ARBITER_TOKEN_SECRET: "dev-secret-change-me"
       ARBITER_TOKEN_ISSUER: "arbiter"
       ARBITER_DECISION_TIMEOUT: "1500ms"
+      ARBITER_AUDIT_POSTGRES_DSN: "postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable"
+      ARBITER_AUDIT_POSTGRES_QUEUE: "2048"
       ARBITER_GATEWAY_SHARED_KEY: ${ARBITER_GATEWAY_SHARED_KEY:-}
       ARBITER_SERVICE_SHARED_KEY: ${ARBITER_SERVICE_SHARED_KEY:-}
     ports:
