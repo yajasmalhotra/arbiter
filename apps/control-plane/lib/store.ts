@@ -1691,22 +1691,14 @@ type BundleSignatureFile = {
   algorithm: "SHA-256";
 };
 
-function isStructuredBundleFile(fileName: string): boolean {
-  return fileName === ".manifest" || fileName.endsWith(".json") || fileName.endsWith(".yaml") || fileName.endsWith(".yml");
-}
-
 function canonicalizeStructuredJSON(raw: Buffer): Buffer {
   const value = JSON.parse(raw.toString("utf8")) as unknown;
   return Buffer.from(stableStringify(value), "utf8");
 }
 
 function hashBundleFile(name: string, payload: Buffer): string {
-  if (isStructuredBundleFile(name)) {
-    try {
-      return createHash("sha256").update(canonicalizeStructuredJSON(payload)).digest("hex");
-    } catch {
-      // Fall back to raw bytes if the file cannot be parsed as structured JSON.
-    }
+  if (name === ".manifest" || name === "data.json") {
+    return createHash("sha256").update(canonicalizeStructuredJSON(payload)).digest("hex");
   }
   return createHash("sha256").update(payload).digest("hex");
 }
@@ -1801,7 +1793,7 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
       scope: signing.scope
     }
   };
-  queueEntry("arbiter.json", Buffer.from(JSON.stringify(arbiterData, null, 2)));
+  queueEntry("data.json", Buffer.from(JSON.stringify({ arbiter: arbiterData }, null, 2)));
   queueEntry("snapshot.json", Buffer.from(JSON.stringify(bundle.snapshot, null, 2)));
 
   const signatureFiles: BundleSignatureFile[] = entries.map(({ name, payload }) => ({
@@ -1839,9 +1831,10 @@ export async function getBundleArchive(
     return null;
   }
   const content = await buildBundleArchive(bundle);
+  const digest = createHash("sha256").update(content).digest("hex");
   return {
     content,
     fileName: `${bundle.id}.tar.gz`,
-    digest: bundle.digest
+    digest
   };
 }
