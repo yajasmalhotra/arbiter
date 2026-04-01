@@ -55,9 +55,15 @@ npm run dev
 
 Data is persisted in `apps/control-plane/.data/control-plane.json` by default.
 Set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence and SQL migrations from `db/migrations`.
+When running in Docker, mount the repo `policy/` directory into the container and set `ARBITER_POLICY_ROOT=/policy` so bundle artifacts can include the live Rego sources.
 
 If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.
 If `ARBITER_TENANT_ID` is set, mutating APIs also require `X-Arbiter-Tenant-ID` to match the configured tenant.
+If `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, role-scoped mutation checks are enabled via `X-Arbiter-Role`:
+
+- `editor` can publish bundles, update policies, and change rollout state.
+- `approver` is required for policy delete, prod promotion/rollback, service-token operations, and signing-key operations.
+
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
 Published bundle archives include `.signatures.json` and are signed by the active signing key.
 In Postgres mode, manage keys with the signing-key APIs; in fallback mode, signing uses:

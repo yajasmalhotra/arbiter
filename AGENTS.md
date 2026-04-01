@@ -7,193 +7,323 @@ Use this file as the working contract for future implementation work.
 
 Build a Go-first hot-path enforcement system that intercepts tool calls, normalizes them into a canonical schema, evaluates policy with OPA, and blocks any execution that lacks a valid signed allow token.
 
-## Architecture Summary
+The control plane supports policy, bundle, and signing-key governance, but it must stay off the request hot path.
 
-### Hot-path services
-- `interceptor`: receives or reconstructs tool-call requests, applies bounded buffering, and orchestrates validation.
-- `translator`: converts provider-native tool-call payloads into a versioned canonical contract.
-- `pdp`: evaluates Rego policies through a local OPA sidecar and returns allow or deny results.
-- `executorauth`: verifies allow tokens at execution time, including expiry, signer, request hash, and replay status.
-- `state`: injects prior-action context from Redis for sequence-aware policies.
+## Current State
 
-### Supporting services
-- `intent`: semantic labeler used in shadow mode first.
-- `control-plane`: Next.js app for policy/data management, audit review, and rollout workflows.
-- `audit` and `telemetry`: structured logging, metrics, traces, and latency budget reporting.
+- The Go interceptor hot path is implemented: OpenAI, Anthropic, generic framework, and streamed OpenAI tool-call inputs are normalized, evaluated, and signed.
+- Token verification is enforced at execution time with replay protection.
+- Redis-backed prior-action context is in place for sequence-aware policies.
+- The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
+- Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
+- Python integration wrappers, LiteLLM harnesses, and pilot soak tooling are present.
+- Remaining work is mostly production hardening: multi-tenant governance, role-scoped approvals, live pilot execution, dashboard/alert validation, and release automation.
 
-## Target Architecture Diagram
+## Runtime Model
 
-```mermaid
-flowchart LR
-    client[ClientOrAgent] --> gateway[LiteLLMProxy]
-    gateway --> interceptor[GoInterceptor]
-    interceptor --> translator[CanonicalTranslator]
-    translator --> stateCtx[StateEnricher]
-    stateCtx --> redis[RedisStateStore]
-    translator --> pdp[OPASidecar]
-    translator --> intent[IntentLabelerShadow]
-    pdp --> token[SignedAllowToken]
-    token --> executorAuth[ExecutorVerifier]
-    executorAuth --> toolExec[ToolExecutor]
-    interceptor --> audit[AuditAndTelemetry]
-    executorAuth --> audit
-```
+Arbiter is a gate, not a judge. The intended flow is:
 
-## Non-Negotiable Invariants
+1. Client or agent sends a tool-call request to a gateway or directly to the interceptor.
+2. The interceptor normalizes the provider payload into `internal/schema.CanonicalRequest`.
+3. Optional prior-action context is pulled from Redis when required by policy.
+4. OPA evaluates Rego policy against the canonical request.
+5. If policy allows, the interceptor issues a short-lived signed token bound to the request hash.
+6. The tool executor verifies the token again before side effects happen.
+7. Audit and telemetry record the decision without blocking the hot path.
+
+The control plane publishes policy bundles and signing material, but it is never in the request path.
+
+## Component Guide
+
+### `cmd/interceptor/`
+
+This is the Go server entrypoint.
+
+- Reads configuration from environment variables.
+- Initializes tracing via `internal/telemetry`.
+- Creates the state store and replay cache.
+- Adds optional Postgres audit fan-out when `ARBITER_AUDIT_POSTGRES_DSN` is set.
+- Builds the interceptor service and registers HTTP routes.
+
+Important environment variables:
+
+- `ARBITER_ADDR` sets the listen address, default `:8080`.
+- `ARBITER_OPA_URL` and `ARBITER_OPA_PATH` point to the OPA decision endpoint.
+- `ARBITER_TOKEN_SECRET` or `ARBITER_TOKEN_KEYS` control execution-token signing.
+- `ARBITER_TOKEN_ACTIVE_KID` selects the active signing key when multiple keys are configured.
+- `ARBITER_REDIS_ADDR` enables Redis-backed state and replay caches.
+- `ARBITER_GATEWAY_SHARED_KEY` and `ARBITER_SERVICE_SHARED_KEY` gate trust-boundary routes.
+- `ARBITER_FAST_ALLOWED_TOOLS` defines the allowlist used by the streamed race-gate route.
+
+### `internal/interceptor/`
+
+This package owns request handling and policy orchestration.
+
+- `POST /v1/intercept/openai` accepts a full OpenAI-style envelope, normalizes it, enriches state, calls OPA, and issues a token on allow.
+- `POST /v1/intercept/openai/stream` reconstructs streamed chunks before normal interception.
+- `POST /v1/intercept/openai/stream/race` starts a fast pre-check as soon as the tool name is visible. It is a bounded early gate, not a replacement for policy.
+- `POST /v1/intercept/anthropic`, `POST /v1/intercept/framework/generic`, and `POST /v1/intercept/framework/langchain` do the same for their respective payloads.
+- `POST /v1/execute/verify/openai`, `/anthropic`, and `/canonical` verify the token at execution time.
+- `POST /v1/state/actions` records prior actions for later sequence-aware lookups.
+- `GET /healthz` is liveness.
+- `GET /readyz` checks dependency readiness when the backing store or decider exposes a `Ready` method.
+
+Operational behavior:
+
+- Gateway routes are protected by `X-Arbiter-Gateway-Key` when `ARBITER_GATEWAY_SHARED_KEY` is set.
+- Service routes are protected by `X-Arbiter-Service-Key` when `ARBITER_SERVICE_SHARED_KEY` is set.
+- Unknown or malformed envelopes are rejected before policy evaluation.
+- Required context triggers a lookup in the state store; if that lookup fails, the request fails closed.
+- The shadow intent labeler may annotate a request, but it cannot block traffic unless explicitly promoted in code.
+- The interceptor records decision latency and structured audit events after each decision.
+
+### `internal/schema/`
+
+This is the canonical contract boundary.
+
+- `CanonicalRequest` is the normalized tool-call shape every adapter must produce.
+- `SchemaVersion` is versioned from day one and currently `v1alpha1`.
+- `Validate` enforces request ID, tenant ID, actor ID, tool name, and JSON parameter validity.
+- `Hash` canonicalizes the request and parameters so the signed token can bind to a stable request digest.
+- `Decision` carries allow/deny, policy version, data revision, decision ID, and the required-context flag.
+- `SignedDecision` is the public response shape from the interceptor.
+
+Do not treat provider JSON as the contract. Provider payloads are always translated into this schema first.
+
+### `internal/translator/`
+
+This package converts provider-native payloads into the canonical request.
+
+- `openai.go` handles standard OpenAI-style tool calls.
+- `openai_stream.go` reconstructs streamed tool-call chunks with a hard parameter-size cap.
+- `anthropic.go` handles Anthropic `tool_use` payloads.
+- `framework.go` handles generic framework and LangChain-style envelopes.
+
+Rules:
+
+- Function tool calls are required for the OpenAI adapter.
+- Empty arguments default to `{}` only when that is still valid JSON.
+- Stream reconstruction is bounded; never allow unbounded argument buffering.
+- Unknown or unsupported tool types are rejected.
+- The race-gate route uses the stream assembler early, but final policy evaluation still happens on the canonical request.
+
+### `internal/pdp/`
+
+This is the OPA client.
+
+- It POSTs `{"input": canonical_request}` to the configured OPA endpoint.
+- It fails closed on transport failures, non-200 responses, or explicit policy denials.
+- `ErrDeniedByPolicy` is the expected deny signal.
+- `Ready` checks the OPA health endpoint.
+
+This package should remain deterministic and cheap. Do not add live remote lookups to the hot path.
+
+### `internal/executorauth/`
+
+This package handles execution-time token issuance and verification.
+
+- Tokens are HS256 JWTs.
+- Claims are bound to request hash, tenant ID, actor ID, tool name, policy version, and decision ID.
+- `kid` support allows signing-key rotation.
+- `Verify` checks signature, issuer, audience, request binding, expiry, and replay status.
+- Replay protection uses a memory cache by default and Redis when configured.
+
+Token rules:
+
+- Tokens are short-lived.
+- Tokens must be verified by the executor, not just by the interceptor.
+- Replay is always a hard failure.
+
+### `internal/state/`
+
+This package stores prior tool actions for sequence-aware policy checks.
+
+- `MemoryStore` is in-process and useful for tests.
+- `RedisStore` stores recent actions per tenant, actor, and session in a Redis list.
+- `RecentActions` returns newest-first history up to the configured limit.
+- `RecordAction` is used when the interceptor or an agent runtime wants to persist prior outcomes.
+
+Policies should request `required_context` only when the next decision truly depends on prior actions.
+
+### `internal/intent/`
+
+This is a shadow-mode semantic labeler interface.
+
+- `Labeler` may annotate a canonical request with an intent label.
+- `NopLabeler` is the current implementation.
+- The labeler must remain non-blocking until product decisions explicitly promote it.
+
+### `internal/audit/`
+
+This package records decisions without blocking enforcement.
+
+- `LogRecorder` writes structured decision logs to `slog`.
+- `PostgresRecorder` queues events and persists them asynchronously.
+- `MultiRecorder` fans out to multiple sinks.
+
+Important behavior:
+
+- Audit emission must not block the hot path.
+- The Postgres recorder drops events if its queue is full and logs a warning instead of stalling requests.
+- Audit records should include decision ID, request ID, trace ID, tenant ID, tool name, allow/deny, reason, policy version, and latency.
+
+### `internal/telemetry/`
+
+This package owns tracing and metrics.
+
+- `otel.go` initializes OTLP export when enabled.
+- `tracing.go` propagates `X-Arbiter-Trace-ID` through request context and response headers.
+- `metrics.go` exposes Prometheus-style counters and latency buckets at `/metrics`.
+
+Use this package to keep observability consistent across the interceptor and support tooling.
+
+### `internal/bundles/`
+
+This is a small shared package for bundle types and digest helpers.
+
+- `types.go` defines rollout states, bundle artifacts, and activations.
+- `digest.go` computes stable digests for bundle snapshots.
+
+Use these helpers when bundle identity needs to remain consistent across control plane, tests, and runtime code.
+
+### `policy/`
+
+This directory contains the Rego policy system and bundle metadata.
+
+- `policy/core/authz.rego` is the system-wide policy gate.
+- `policy/domain/sql.rego`, `slack.rego`, and `stripe.rego` are current tool-specific allow rules.
+- `policy/data/config.json` holds the data used by policy.
+- `policy/arbiter.json` defines the tool registry and bundle metadata that OPA expects.
+- `policy/tests/` contains normal, regression, and adversarial fixtures.
+
+Policy behavior:
+
+- Unknown tools are denied.
+- Required context without history is denied.
+- Domain policies are kept small and deterministic.
+- Policy data should never come from live remote calls on the hot path.
+
+### `apps/control-plane/`
+
+This is the governance UI and bundle distribution service.
+
+- `lib/db.ts` runs SQL migrations from `db/migrations` when `ARBITER_DB_URL` or `DATABASE_URL` is set.
+- `lib/store.ts` is the main persistence façade. It chooses Postgres first and local JSON fallback second.
+- `lib/store_legacy.ts` implements local `.data/control-plane.json` storage for developer environments.
+- `lib/auth.ts` enforces `CONTROL_PLANE_API_KEY`, optional tenant fencing via `ARBITER_TENANT_ID`, and optional role-scoped mutation authorization via `ARBITER_CONTROL_PLANE_ENFORCE_RBAC`.
+- `lib/context.ts` supplies default tenant and actor IDs.
+- `lib/sample-intercept.ts` provides the dashboard test payload.
+- The dashboard at `/` shows policy summaries, the policy grid, and recent audit events.
+
+Control-plane routes:
+
+- Policy CRUD and rollout state live under `/api/policies` and `/api/rollouts`.
+- Bundle lifecycle lives under `/api/bundles`, `/api/bundles/active`, `/api/bundles/:id/activate`, `/api/bundles/:id/promote`, and channel rollback/artifact/manifest routes.
+- `GET /api/bundles/channels/:channel/manifest` and `GET /api/bundles/channels/:channel/artifact` are the OPA-facing distribution endpoints.
+- `GET /api/revisions` and `GET /api/bundles/activations` expose version history.
+- `GET /api/audit` surfaces audit history.
+- `GET /api/service-tokens`, `POST /api/service-tokens`, and `POST /api/service-tokens/:id/revoke` manage bundle-fetch credentials.
+- `GET /api/signing-keys`, `POST /api/signing-keys`, `POST /api/signing-keys/:id/activate`, and `POST /api/signing-keys/:id/revoke` manage bundle-signing rotation.
+- Mutating routes require `CONTROL_PLANE_API_KEY` when configured, and `X-Arbiter-Tenant-ID` must match `ARBITER_TENANT_ID` when that fence is enabled.
+- With `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role`. `editor` covers policy/rollout/bundle draft operations, while `approver` is required for prod promotions/rollbacks, policy delete, and key/token lifecycle operations.
+
+Control-plane storage behavior:
+
+- Postgres mode is the primary production path.
+- Local JSON fallback exists only for dev convenience.
+- The bundle signer uses the active DB-backed signing key when Postgres is enabled.
+- Environment signing values seed or bootstrap the signing path when DB state is unavailable.
+- The control-plane bundle builder reads directly from the mounted `policy/` tree, so Docker/Compose runs must provide `ARBITER_POLICY_ROOT=/policy` and mount that directory read-only.
+- Signing keys are audited on create, activate, and revoke.
+
+### `integrations/python/`
+
+This is the first-class Python integration package.
+
+- `arbiter_integrations.litellm` wraps OpenAI/LiteLLM-style tool calls.
+- `arbiter_integrations.openclaw` wraps generic or OpenClaw-style tool calls.
+- `http_client.py` handles HTTP transport and shared-key headers.
+- `pyproject.toml`, `CHANGELOG.md`, and `SEMVER.md` define packaging and release behavior.
+
+Use this package when users want a small client-side wrapper instead of writing raw HTTP calls.
+
+### `examples/litellm-harness/`
+
+This is the client-style validation harness.
+
+- It drives allowed, denied, and replay scenarios against a running Arbiter stack.
+- It verifies the full intercept -> token -> verify flow.
+- It can run in arbiter-only mode for smoke tests without LiteLLM.
+
+### `tools/pilot/soak_runner.py`
+
+This script is the pilot soak harness.
+
+- It generates sustained allow/deny traffic.
+- It verifies execution-token replay behavior.
+- It measures latency and compares `/metrics` against a baseline.
+
+Use this script for live pilot validation, not as a unit test replacement.
+
+### `deploy/`
+
+This directory contains deployment wiring and runtime defaults.
+
+- `docker-compose.yml` starts control-plane, Postgres, Arbiter, OPA, Redis, and optional LiteLLM.
+- `env.example` documents the runtime environment variables.
+- `litellm-config.yaml` configures the optional proxy profile.
+
+Container entrypoints:
+
+- Root `Dockerfile` builds the Go interceptor binary and runs it in a distroless image.
+- `apps/control-plane/Dockerfile` builds the Next.js app and runs `npm run start` in production mode.
+
+### `api/`
+
+This directory publishes the public contracts.
+
+- `api/openapi.yaml` is the HTTP API contract.
+- `api/schemas/canonical-request.v1alpha1.schema.json` is the canonical request schema.
+- `api/schemas/signed-decision.schema.json` is the signed decision response schema.
+- `api/examples/` holds example payloads for request and verify flows.
+
+Update these files when request/response shapes change.
+
+## Hot-Path Rules
 
 - No tool executes without a valid signed allow token.
-- OPA or token verification failure is always fail-closed.
-- The executor must verify the token itself. Do not trust upstream approval alone.
-- The labeler is non-blocking until it is explicitly promoted from shadow mode.
-- Required temporal context must be present for sequence-aware policies; otherwise deny.
-- The control plane must not sit on the request hot path.
+- OPA denial, token validation failure, replay detection, or missing required context must fail closed.
+- The control plane must never sit on the request hot path.
+- Stream buffering must be bounded.
+- Any new network call on the hot path needs an explicit timeout and failure mode.
+- Do not trust upstream approval alone; the executor must verify the token itself.
 
-## Trust Boundaries
+## Working Rules
 
-Treat these boundaries as explicit during design and implementation:
-
-1. Agent or client to gateway.
-2. Gateway to interceptor.
-3. Interceptor to OPA sidecar.
-4. Interceptor to Redis-backed state context.
-5. Interceptor to tool executor.
-6. Control plane to policy and data distribution.
-
-Design against direct tool execution, replayed approvals, forged tokens, stale policy data, and alternate execution paths that bypass the interceptor.
-
-## Recommended Implementation Order
-
-1. Bootstrap the Go module and package layout.
-2. Define the canonical schema and version it from day one.
-3. Add golden fixtures for OpenAI-style, Anthropic-style, and framework-generated tool calls.
-4. Implement the OPA client, base policy packages, and signed allow-token flow.
-5. Implement execution-time token verification and replay protection.
-6. Build the LiteLLM-first streaming interceptor with strict buffering and timeout limits.
-7. Add Redis-backed temporal state enrichment.
-8. Build structured audit logging and telemetry.
-9. Add the control plane for policy rollout and simulation.
-10. Integrate the intent labeler in shadow mode only.
-
-## Repository Expectations
-
-Prefer this layout unless a strong reason emerges to change it:
-
-```text
-cmd/interceptor/
-internal/schema/
-internal/translator/
-internal/pdp/
-internal/executorauth/
-internal/state/
-internal/intent/
-internal/audit/
-internal/telemetry/
-policy/core/
-policy/domain/
-policy/data/
-policy/tests/
-apps/control-plane/
-deploy/
-```
-
-## Implementation Guidelines
-
-### Go hot path
-- Keep hot-path logic small, explicit, and allocation-aware.
-- Use `context.Context` consistently for deadlines and cancellation.
-- Bound memory use for streamed argument buffering.
-- Propagate structured errors with enough metadata for audit logs.
-
-### Canonical schema
-- Treat the canonical schema as the contract boundary, not provider JSON.
-- Include schema version, tenant, actor, session metadata, tool name, normalized parameters, derived state context, and decision metadata.
+- Keep hot-path code small, explicit, and allocation-aware.
+- Use `context.Context` consistently for cancellation and deadlines.
 - Reject unknown or ambiguous payloads unless they normalize safely.
-
-### Policy design
-- Separate `policy/core/` for system-wide invariants from `policy/domain/` for tool-specific controls.
-- Keep policy evaluation deterministic and cheap.
-- Do not pull live remote data from Rego on the hot path.
 - Version policy and data artifacts so every decision is traceable.
+- When adding a new service or package, update `README.md` if the public setup or architecture changes.
+- When adding or changing a service boundary, update this file.
+- Keep examples aligned with `schema.CurrentSchemaVersion`.
 
-### Token design
-- Bind tokens to request hash, tenant, actor, tool, policy version, expiry, and `jti`.
-- Keep tokens short-lived.
-- Plan for replay protection and key rotation from the start.
+## Testing And Validation
 
-### Control plane
-- Keep it out of the request path.
-- Support `draft`, `shadow`, `canary`, `enforced`, and rollback workflows.
-- Show decision history, policy versions, and simulation results.
+- Run `go test ./...` for Go code.
+- Run `opa test` against `policy/core`, `policy/domain`, `policy/tests`, and `policy/data`.
+- Run `npm run build` in `apps/control-plane` after control-plane changes.
+- Run `python3 -m unittest discover integrations/python/tests -v` for Python packaging changes.
+- Run `python3 tools/pilot/soak_runner.py` for pilot readiness checks.
 
-## Testing Standards
+## Open Work
 
-- Create tests for every package with business logic.
-- Add golden tests for normalization and schema compatibility.
-- Add `opa test` coverage for policy behavior.
-- Add replay tests for policy revisions and shadow mode.
-- Add fuzz tests for malformed payloads and stream reconstruction.
-- Add load and fault-injection coverage for OPA, Redis, and labeler dependency failure modes.
+1. Finish production multi-tenant governance in the control plane, including role-scoped approvals and rollout controls.
+2. Run the live pilot soak in target infrastructure and collect artifacts.
+3. Validate dashboards, alerting, and OTLP traces against real traffic.
+4. Automate integration SDK releases and signing/upload workflows.
 
-## Documentation Discipline
-
-When adding a new service or package:
-
-- Update `README.md` if the public architecture or setup story changes.
-- Update this file if the service boundary, implementation order, or invariants change.
-- Keep examples aligned with the current canonical schema version.
-
-## Build Progress
-
-- [x] Bootstrap the Go module and package layout.
-- [x] Define the versioned canonical schema and request hashing.
-- [x] Add OpenAI normalization and golden-style translation tests.
-- [x] Implement OPA decisioning and signed execution-token flow.
-- [x] Implement execution-time token verification with replay protection.
-- [x] Build the HTTP interception service and action-recording endpoints.
-- [x] Add initial Rego policies, policy data, and local Docker runtime wiring.
-- [x] Add focused unit tests for schema, translation, PDP, token verification, state, and service handlers.
-- [x] Add streamed tool-call chunk reconstruction.
-- [x] Add Anthropic adapter.
-- [x] Add framework adapters.
-- [x] Add first-class tracing.
-- [x] Add CI automation for `go test` and `opa test`.
-- [x] Add first-class in-process metrics and `/metrics` endpoint.
-- [x] Expand baseline policy regression coverage for SQL, Slack, Stripe, and temporal context.
-- [x] Add chunk-phase stream intercept route with fast early deny gate.
-- [x] Add end-to-end integration tests that cover OPA decisioning, Redis-backed replay protection, and required-context history.
-- [x] Add OTLP trace export plumbing and latency SLO instrumentation.
-- [x] Build the control-plane MVP for policy CRUD, rollout-state management, audit views, and request simulation.
-- [x] Add signing-key rotation hardening and pilot readiness documentation.
-- [x] Add local LiteLLM harness examples and Docker wiring for client-style integration tests.
-- [x] Publish first-class API contracts in `api/` (OpenAPI + canonical/decision JSON schemas + examples).
-- [x] Add interceptor readiness endpoint and optional trust-boundary shared-key enforcement for gateway/service routes.
-- [x] Add control-plane bundle lifecycle primitives (publish, activate, active bundle, revision and activation history APIs).
-- [x] Add Postgres-backed control-plane persistence with SQL migrations and JSON-store fallback compatibility.
-- [x] Add authenticated bundle artifact and channel-manifest APIs for control-plane bundle distribution.
-- [x] Add channel artifact endpoint with digest-aware caching semantics and auto-bootstrap for empty environments.
-- [x] Wire local Docker runtime for control-plane + Postgres + OPA bundle polling via service-token authentication.
-- [x] Add control-plane service-token management APIs (list/create/revoke) with hashed token storage.
-- [x] Add signed bundle emission (`.signatures.json`) and OPA key/scope verification wiring in local runtime.
-- [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
-- [x] Add optional non-blocking Postgres audit sink fan-out for interceptor decision events.
-- [x] Add pilot soak traffic harness and runbook-backed validation workflow for readiness Steps 6 and 7.
-- [x] Add Python integration package distribution metadata (`pyproject`), changelog, and semver policy docs.
-- [x] Add tenant-fenced control-plane mutation auth for single-tenant deployments.
-- [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
-- [x] Add explicit control-plane signing-key lifecycle APIs (list/create/activate/revoke) with audit trails and DB-backed active-key signing.
-- [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
-
-## Immediate Build Targets
-
-The next code changes should usually start here:
-
-1. `apps/control-plane/` to complete migration from JSON fallback to production datastore defaults and multi-tenant access controls.
-2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
-3. `apps/control-plane/` to harden policy/data distribution governance for multi-tenant operations and role-scoped approvals.
-4. Pilot-environment execution: run `tools/pilot/soak_runner.py` in target infra and attach collected artifacts to readiness review.
-5. Publish integration SDK artifacts and automate release workflows (build/sign/upload + release notes).
-
-## Production Pilot Sequence
+## Pilot Sequence
 
 Execute these steps in order. After each step, update this section and `README.md` immediate next steps, then push.
 

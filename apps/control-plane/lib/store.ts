@@ -218,6 +218,21 @@ function bundleSigningConfig(): BundleSigningConfig {
   };
 }
 
+function policyRoot(): string {
+  const configured = process.env.ARBITER_POLICY_ROOT?.trim();
+  if (configured) {
+    return configured;
+  }
+  return path.resolve(process.cwd(), "..", "..", "policy");
+}
+
+function missingPolicyTreeError(root: string, err: unknown): Error {
+  const detail = err instanceof Error ? err.message : "unknown error";
+  return new Error(
+    `policy tree not found at ${root}: ${detail}. Set ARBITER_POLICY_ROOT or mount the repo policy directory into the control-plane container.`
+  );
+}
+
 async function ensureBootstrapSigningKey(db: Pool): Promise<void> {
   const bootstrap = bundleSigningConfig();
   const now = new Date().toISOString();
@@ -1743,23 +1758,27 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   };
   queueEntry(".manifest", Buffer.from(JSON.stringify(manifest, null, 2)));
 
-  const repoRoot = path.resolve(process.cwd(), "..", "..");
-  const policyRoot = path.join(repoRoot, "policy");
-  const coreRoot = path.join(policyRoot, "core");
-  const domainRoot = path.join(policyRoot, "domain");
+  const root = policyRoot();
+  const coreRoot = path.join(root, "core");
+  const domainRoot = path.join(root, "domain");
 
-  for (const root of [coreRoot, domainRoot]) {
-    const files = (await listFilesRecursively(root)).filter((file) => file.endsWith(".rego")).sort((a, b) =>
-      a.localeCompare(b)
-    );
+  for (const rootDir of [coreRoot, domainRoot]) {
+    let files: string[];
+    try {
+      files = (await listFilesRecursively(rootDir))
+        .filter((file) => file.endsWith(".rego"))
+        .sort((a, b) => a.localeCompare(b));
+    } catch (err) {
+      throw missingPolicyTreeError(root, err);
+    }
     for (const file of files) {
       const payload = await readFile(file);
-      const name = path.relative(policyRoot, file).replaceAll(path.sep, "/");
+      const name = path.relative(root, file).replaceAll(path.sep, "/");
       queueEntry(name, payload);
     }
   }
 
-  const arbiterDataPath = path.join(policyRoot, "arbiter.json");
+  const arbiterDataPath = path.join(root, "arbiter.json");
   let arbiterData: Record<string, unknown> = {};
   try {
     arbiterData = JSON.parse(await readFile(arbiterDataPath, "utf8")) as Record<string, unknown>;

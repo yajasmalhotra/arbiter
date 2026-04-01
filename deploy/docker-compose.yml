@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     environment:
       ARBITER_DB_URL: "postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable"
+      ARBITER_POLICY_ROOT: "/policy"
       ARBITER_BUNDLE_SERVICE_TOKEN: ${ARBITER_BUNDLE_SERVICE_TOKEN:-dev-bundle-token}
       ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES: ${ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES:-bundle:read}
       ARBITER_BUNDLE_SIGNING_KEY_ID: ${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}
@@ -13,8 +14,12 @@ services:
       CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
       ARBITER_TENANT_ID: ${ARBITER_TENANT_ID:-default}
       ARBITER_ACTOR: ${ARBITER_ACTOR:-control-plane}
+      ARBITER_CONTROL_PLANE_ENFORCE_RBAC: ${ARBITER_CONTROL_PLANE_ENFORCE_RBAC:-false}
+      ARBITER_CONTROL_PLANE_DEFAULT_ROLE: ${ARBITER_CONTROL_PLANE_DEFAULT_ROLE:-viewer}
     ports:
       - "3000:3000"
+    volumes:
+      - ../policy:/policy:ro
     depends_on:
       - postgres
 

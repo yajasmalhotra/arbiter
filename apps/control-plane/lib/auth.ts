@@ -4,6 +4,47 @@ import { validateServiceToken } from "./store";
 
 export const CONTROL_PLANE_AUTH_HEADER = "X-Arbiter-Control-Key";
 export const CONTROL_PLANE_TENANT_HEADER = "X-Arbiter-Tenant-ID";
+export const CONTROL_PLANE_ROLE_HEADER = "X-Arbiter-Role";
+
+export type ControlPlaneRole = "viewer" | "editor" | "approver" | "admin";
+
+const ROLE_WEIGHT: Record<ControlPlaneRole, number> = {
+  viewer: 10,
+  editor: 20,
+  approver: 30,
+  admin: 40
+};
+
+function parseBool(raw: string | undefined): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function rbacEnabled(): boolean {
+  return parseBool(process.env.ARBITER_CONTROL_PLANE_ENFORCE_RBAC);
+}
+
+function normalizeRole(raw: string | undefined): ControlPlaneRole | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const role = raw.trim().toLowerCase();
+  if (role === "viewer" || role === "editor" || role === "approver" || role === "admin") {
+    return role;
+  }
+  return undefined;
+}
+
+function currentRole(request: NextRequest): ControlPlaneRole | undefined {
+  return normalizeRole(
+    request.headers.get(CONTROL_PLANE_ROLE_HEADER) ??
+      process.env.ARBITER_CONTROL_PLANE_DEFAULT_ROLE ??
+      undefined
+  );
+}
 
 export function requireControlPlaneAuth(request: NextRequest): NextResponse | undefined {
   const expected = process.env.CONTROL_PLANE_API_KEY?.trim();
@@ -29,6 +70,34 @@ export function requireControlPlaneTenant(request: NextRequest): NextResponse | 
   }
 
   if (tenant !== expectedTenant) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
+  return undefined;
+}
+
+export function requireControlPlaneRole(
+  request: NextRequest,
+  minimumRole: ControlPlaneRole
+): NextResponse | undefined {
+  const unauthorized = requireControlPlaneAuth(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  if (!rbacEnabled()) {
+    return undefined;
+  }
+
+  const role = currentRole(request);
+  if (!role) {
+    return NextResponse.json(
+      { error: `missing or invalid role; set ${CONTROL_PLANE_ROLE_HEADER}` },
+      { status: 403 }
+    );
+  }
+
+  if (ROLE_WEIGHT[role] < ROLE_WEIGHT[minimumRole]) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

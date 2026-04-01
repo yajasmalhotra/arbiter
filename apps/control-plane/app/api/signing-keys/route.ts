@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneAuth } from "../../../lib/auth";
+import { requireControlPlaneRole } from "../../../lib/auth";
 import { createSigningKey, listSigningKeys } from "../../../lib/store";
 
 export async function GET(request: NextRequest) {
-  const unauthorized = requireControlPlaneAuth(request);
+  const unauthorized = requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const unauthorized = requireControlPlaneAuth(request);
+  const unauthorized = requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }

@@ -22,6 +22,7 @@ Arbiter provides:
 ### 1. Run the Stack Locally
 
 Arbiter requires OPA and Redis to run. The default Compose stack also includes the control-plane and Postgres so OPA can pull policy bundles through authenticated bundle APIs.
+The control-plane container needs the repo `policy/` tree mounted read-only because bundle archives are assembled from the current Rego sources.
 
 ```bash
 docker compose -f deploy/docker-compose.yml up --build -d
@@ -329,6 +330,7 @@ Open `http://localhost:3000` to view the dashboard.
 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
 When `ARBITER_TENANT_ID` is set, those same routes also require `X-Arbiter-Tenant-ID` to match the deployment tenant.
+When `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role` with sufficient privileges (`editor` or `approver` depending on operation).
 
 Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/manifest`, `/api/bundles/channels/*/artifact`) require `Authorization: Bearer <token>`. Configure a bootstrap token with:
 

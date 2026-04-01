@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneAuth } from "../../../../../lib/auth";
+import { requireControlPlaneRole } from "../../../../../lib/auth";
 import { revokeSigningKey } from "../../../../../lib/store";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const unauthorized = requireControlPlaneAuth(request);
+  const unauthorized = requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
