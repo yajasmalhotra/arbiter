@@ -324,6 +324,7 @@ Open `http://localhost:3000` to view the dashboard.
 - `GET /api/revisions`
 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
+When `ARBITER_TENANT_ID` is set, those same routes also require `X-Arbiter-Tenant-ID` to match the deployment tenant.
 
 Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/manifest`, `/api/bundles/channels/*/artifact`) require `Authorization: Bearer <token>`. Configure a bootstrap token with:
 

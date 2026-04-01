@@ -52,6 +52,7 @@ Data is persisted in `apps/control-plane/.data/control-plane.json` by default.
 Set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence and SQL migrations from `db/migrations`.
 
 If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.
+If `ARBITER_TENANT_ID` is set, mutating APIs also require `X-Arbiter-Tenant-ID` to match the configured tenant.
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
 Published bundle archives include `.signatures.json` and are signed with:
 
