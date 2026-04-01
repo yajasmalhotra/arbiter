@@ -1,48 +1,50 @@
 package arbiter.authz
 
-default allow = false
-default required_context_missing = false
+import rego.v1
 
-known_tool {
+default allow := false
+default required_context_missing := false
+
+known_tool if {
 	object.get(data.arbiter.tools, input.tool_name, null) != null
 }
 
-required_context_missing {
+required_context_missing if {
 	count(object.get(input, "required_context", [])) > 0
 	count(object.get(input, "previous_actions", [])) == 0
 }
 
-domain_allow {
+domain_allow if {
 	data.arbiter.domain.sql.allow with input as input
 }
 
-domain_allow {
+domain_allow if {
 	data.arbiter.domain.slack.allow with input as input
 }
 
-domain_allow {
+domain_allow if {
 	data.arbiter.domain.stripe.allow with input as input
 }
 
-allow {
+allow if {
 	known_tool
 	not required_context_missing
 	domain_allow
 }
 
-reason := "allowed" {
+reason := "allowed" if {
 	allow
 }
 
-reason := "required context missing" {
+reason := "required context missing" if {
 	required_context_missing
 }
 
-reason := sprintf("unknown tool: %s", [input.tool_name]) {
+reason := sprintf("unknown tool: %s", [input.tool_name]) if {
 	not known_tool
 }
 
-reason := "tool policy denied" {
+reason := "tool policy denied" if {
 	known_tool
 	not required_context_missing
 	not allow

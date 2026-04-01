@@ -1,8 +1,9 @@
 package arbiter.authz_test
 
+import rego.v1
 import data.arbiter.authz
 
-test_slack_allow {
+test_slack_allow if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-1"
@@ -18,7 +19,7 @@ test_slack_allow {
 	result.reason == "allowed"
 }
 
-test_required_context_missing {
+test_required_context_missing if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-2"
@@ -36,7 +37,7 @@ test_required_context_missing {
 	result.required_context_missing
 }
 
-test_required_context_present_allows {
+test_required_context_present_allows if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-3"
@@ -59,7 +60,7 @@ test_required_context_present_allows {
 	result.allow
 }
 
-test_sql_drop_denied {
+test_sql_drop_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-4"
@@ -74,7 +75,7 @@ test_sql_drop_denied {
 	result.reason == "tool policy denied"
 }
 
-test_slack_channel_denied {
+test_slack_channel_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-5"
@@ -89,7 +90,7 @@ test_slack_channel_denied {
 	not result.allow
 }
 
-test_stripe_refund_over_cap_denied {
+test_stripe_refund_over_cap_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "req-6"

@@ -1,8 +1,9 @@
 package arbiter.adversarial_test
 
+import rego.v1
 import data.arbiter.authz
 
-test_unknown_tool_denied {
+test_unknown_tool_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "adv-1"
@@ -17,7 +18,7 @@ test_unknown_tool_denied {
 	contains(result.reason, "unknown tool")
 }
 
-test_sql_delete_denied {
+test_sql_delete_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "adv-2"
@@ -32,7 +33,7 @@ test_sql_delete_denied {
 	result.reason == "tool policy denied"
 }
 
-test_slack_empty_channel_denied {
+test_slack_empty_channel_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "adv-3"
@@ -47,7 +48,7 @@ test_slack_empty_channel_denied {
 	not result.allow
 }
 
-test_stripe_zero_amount_denied {
+test_stripe_zero_amount_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "adv-4"
@@ -61,7 +62,7 @@ test_stripe_zero_amount_denied {
 	not result.allow
 }
 
-test_required_context_without_history_denied {
+test_required_context_without_history_denied if {
 	result := authz.decision with input as {
 		"metadata": {
 			"request_id": "adv-5"
