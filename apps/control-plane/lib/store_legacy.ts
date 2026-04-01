@@ -221,10 +221,6 @@ export async function publishBundle(input: PublishBundleInput = {}): Promise<Bun
     : data.policies
   ).map((policy) => ({ ...policy }));
 
-  if (selectedPolicies.length === 0) {
-    throw new Error("no policies available to publish");
-  }
-
   const policyRevision: PolicyRevision = {
     id: `pr_${crypto.randomUUID()}`,
     policyIds: selectedPolicies.map((policy) => policy.id),

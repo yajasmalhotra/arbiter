@@ -19,7 +19,12 @@ This Next.js application provides an initial governance control plane for Arbite
   - `GET /api/bundles/active`
   - `GET /api/bundles/:id`
   - `POST /api/bundles/:id/activate`
+  - `POST /api/bundles/:id/promote`
   - `GET /api/bundles/activations`
+  - `GET /api/bundles/artifacts/:id`
+  - `GET /api/bundles/channels/:channel/manifest`
+  - `GET /api/bundles/channels/:channel/artifact`
+  - `POST /api/bundles/channels/:channel/rollback`
 - Revision APIs:
   - `GET /api/revisions`
 - Audit read API:
@@ -39,6 +44,8 @@ npm install
 npm run dev
 ```
 
-Data is persisted in `apps/control-plane/.data/control-plane.json`.
+Data is persisted in `apps/control-plane/.data/control-plane.json` by default.
+Set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence and SQL migrations from `db/migrations`.
 
 If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.
+Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.

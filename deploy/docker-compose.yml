@@ -1,4 +1,31 @@
 services:
+  control-plane:
+    build:
+      context: ../apps/control-plane
+      dockerfile: Dockerfile
+    environment:
+      ARBITER_DB_URL: "postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable"
+      ARBITER_BUNDLE_SERVICE_TOKEN: ${ARBITER_BUNDLE_SERVICE_TOKEN:-dev-bundle-token}
+      ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES: ${ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES:-bundle:read}
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
+      ARBITER_TENANT_ID: ${ARBITER_TENANT_ID:-default}
+      ARBITER_ACTOR: ${ARBITER_ACTOR:-control-plane}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: arbiter
+      POSTGRES_USER: arbiter
+      POSTGRES_PASSWORD: arbiter
+    ports:
+      - "5432:5432"
+    volumes:
+      - arbiter-postgres:/var/lib/postgresql/data
+
   arbiter:
     build:
       context: ..
@@ -21,19 +48,20 @@ services:
   opa:
     # Pin below OPA 1.x: v1 requires `if` before rule bodies; policy/ is classic Rego.
     image: openpolicyagent/opa:0.69.0
-    # Prefix loads JSON at data.arbiter (see policy/arbiter.json). Loading /policy
-    # recursively maps policy/data/config.json to data.data.* and breaks authz.
     command:
       - "run"
       - "--server"
       - "--addr=0.0.0.0:8181"
-      - "arbiter:/policy/arbiter.json"
-      - "/policy/core"
-      - "/policy/domain"
-    volumes:
-      - ../policy:/policy:ro
+      - "--set=services.control_plane.url=http://control-plane:3000"
+      - "--set=services.control_plane.credentials.bearer.token=${ARBITER_BUNDLE_SERVICE_TOKEN:-dev-bundle-token}"
+      - "--set=bundles.arbiter.service=control_plane"
+      - "--set=bundles.arbiter.resource=/api/bundles/channels/prod/artifact"
+      - "--set=bundles.arbiter.polling.min_delay_seconds=5"
+      - "--set=bundles.arbiter.polling.max_delay_seconds=20"
     ports:
       - "8181:8181"
+    depends_on:
+      - control-plane
 
   redis:
     image: redis:7-alpine
@@ -58,3 +86,6 @@ services:
     volumes:
       - ./litellm-config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+volumes:
+  arbiter-postgres:

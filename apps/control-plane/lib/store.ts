@@ -640,9 +640,6 @@ export async function publishBundle(input: PublishBundleInput = {}): Promise<Bun
           );
 
       const selectedPolicies = selectedPoliciesResult.rows.map((row) => policyFromRow(row as Record<string, unknown>));
-      if (selectedPolicies.length === 0) {
-        throw new Error("no policies available to publish");
-      }
 
       const policyRevisionId = `pr_${randomUUID()}`;
       const dataRevisionId = `dr_${randomUUID()}`;
@@ -1006,7 +1003,7 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
 
   return withDbOrFallback(
     async (db) => {
-      const result = await db.query(
+      let result = await db.query(
         `
           SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id
           FROM bundle_channels c
@@ -1016,6 +1013,26 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         `,
         [defaultTenantId(), channel]
       );
+      if (!result.rowCount && channel === "prod") {
+        const bootstrapped = await publishBundle({
+          rolloutState: "enforced",
+          actor: defaultActor()
+        });
+        await promoteBundle(bootstrapped.id, "prod", {
+          actor: defaultActor(),
+          notes: "auto bootstrap prod channel"
+        });
+        result = await db.query(
+          `
+            SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id
+            FROM bundle_channels c
+            JOIN bundles b ON b.id = c.bundle_id
+            WHERE c.tenant_id = $1 AND c.channel = $2
+            LIMIT 1
+          `,
+          [defaultTenantId(), channel]
+        );
+      }
       if (!result.rowCount) {
         return null;
       }
@@ -1036,7 +1053,26 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
       }
       const bundle = await legacy.getActiveBundle();
       if (!bundle) {
-        return null;
+        const bootstrapped = await legacy.publishBundle({
+          rolloutState: "enforced",
+          actor: defaultActor()
+        });
+        const promoted = await legacy.activateBundle(bootstrapped.id, {
+          actor: defaultActor(),
+          notes: "auto bootstrap prod channel"
+        });
+        if (!promoted) {
+          return null;
+        }
+        return {
+          channel: "prod",
+          bundleId: promoted.id,
+          digest: promoted.digest,
+          policyRevisionId: promoted.policyRevisionId,
+          dataRevisionId: promoted.dataRevisionId,
+          artifactPath: `/api/bundles/artifacts/${encodeURIComponent(promoted.id)}`,
+          generatedAt: new Date().toISOString()
+        };
       }
       return {
         channel: "prod",
@@ -1049,6 +1085,16 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
       };
     }
   );
+}
+
+export async function getChannelArchive(
+  channel: BundleChannel
+): Promise<{ content: Buffer; fileName: string; digest: string } | null> {
+  const manifest = await getChannelManifest(channel);
+  if (!manifest) {
+    return null;
+  }
+  return getBundleArchive(manifest.bundleId);
 }
 
 async function addTarEntry(pack: tar.Pack, name: string, payload: Buffer): Promise<void> {
