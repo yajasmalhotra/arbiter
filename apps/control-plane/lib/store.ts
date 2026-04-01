@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -17,7 +17,8 @@ import type {
   DataRevision,
   PolicyRecord,
   PolicyRevision,
-  RolloutState
+  RolloutState,
+  ServiceToken
 } from "./types";
 
 const gzip = promisify(gzipCallback);
@@ -49,6 +50,18 @@ function bundleFromRow(row: Record<string, unknown>): BundleArtifact {
     createdBy: String(row.created_by),
     createdAt: toISOString(row.created_at),
     snapshot: asObject(row.snapshot) as BundleArtifact["snapshot"]
+  };
+}
+
+function serviceTokenFromRow(row: Record<string, unknown>): ServiceToken {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    scopes: normalizeScopes(row.scopes),
+    createdBy: String(row.created_by),
+    createdAt: toISOString(row.created_at),
+    lastUsedAt: row.last_used_at ? toISOString(row.last_used_at) : undefined,
+    revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
   };
 }
 
@@ -254,6 +267,116 @@ export async function validateServiceToken(
         name: "bootstrap-bundle-reader",
         scopes
       };
+    }
+  );
+}
+
+type CreateServiceTokenInput = {
+  name: string;
+  scopes?: string[];
+  actor?: string;
+};
+
+export async function listServiceTokens(): Promise<ServiceToken[]> {
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapServiceToken(db);
+      const result = await db.query(
+        `
+          SELECT id, name, scopes, created_by, created_at, last_used_at, revoked_at
+          FROM service_tokens
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => serviceTokenFromRow(row as Record<string, unknown>));
+    },
+    async () => []
+  );
+}
+
+function generateServiceToken(id: string): string {
+  return `${id}.${randomBytes(24).toString("base64url")}`;
+}
+
+export async function createServiceToken(
+  input: CreateServiceTokenInput
+): Promise<{ token: string; record: ServiceToken }> {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("service token name is required");
+  }
+
+  const normalizedScopes =
+    input.scopes?.map((scope) => scope.trim()).filter((scope) => scope.length > 0) ?? ["bundle:read"];
+  if (!normalizedScopes.length) {
+    throw new Error("at least one scope is required");
+  }
+
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapServiceToken(db);
+      const now = new Date().toISOString();
+      const id = `st_${randomUUID()}`;
+      const token = generateServiceToken(id);
+      await db.query(
+        `
+          INSERT INTO service_tokens (
+            id, tenant_id, name, token_hash, scopes, created_by, created_at
+          )
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+        `,
+        [
+          id,
+          defaultTenantId(),
+          name,
+          tokenHash(token),
+          JSON.stringify(normalizedScopes),
+          input.actor?.trim() || defaultActor(),
+          now
+        ]
+      );
+      const record: ServiceToken = {
+        id,
+        name,
+        scopes: normalizedScopes,
+        createdBy: input.actor?.trim() || defaultActor(),
+        createdAt: now
+      };
+      return { token, record };
+    },
+    async () => {
+      throw new Error("service token management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+export async function revokeServiceToken(id: string): Promise<ServiceToken | undefined> {
+  if (!id.trim()) {
+    throw new Error("service token id is required");
+  }
+
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapServiceToken(db);
+      const now = new Date().toISOString();
+      const result = await db.query(
+        `
+          UPDATE service_tokens
+          SET revoked_at = COALESCE(revoked_at, $1)
+          WHERE tenant_id = $2 AND id = $3
+          RETURNING id, name, scopes, created_by, created_at, last_used_at, revoked_at
+        `,
+        [now, defaultTenantId(), id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      return serviceTokenFromRow(result.rows[0] as Record<string, unknown>);
+    },
+    async () => {
+      throw new Error("service token management requires ARBITER_DB_URL");
     }
   );
 }

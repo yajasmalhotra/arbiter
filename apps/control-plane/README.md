@@ -25,6 +25,10 @@ This Next.js application provides an initial governance control plane for Arbite
   - `GET /api/bundles/channels/:channel/manifest`
   - `GET /api/bundles/channels/:channel/artifact`
   - `POST /api/bundles/channels/:channel/rollback`
+- Service token APIs:
+  - `GET /api/service-tokens`
+  - `POST /api/service-tokens`
+  - `POST /api/service-tokens/:id/revoke`
 - Revision APIs:
   - `GET /api/revisions`
 - Audit read API:

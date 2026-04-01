@@ -287,6 +287,9 @@ Open `http://localhost:3000` to view the dashboard.
 - `GET /api/bundles/channels/:channel/manifest`
 - `GET /api/bundles/channels/:channel/artifact`
 - `POST /api/bundles/channels/:channel/rollback`
+- `GET /api/service-tokens`
+- `POST /api/service-tokens`
+- `POST /api/service-tokens/:id/revoke`
 - `GET /api/revisions`
 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.

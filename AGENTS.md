@@ -172,6 +172,7 @@ When adding a new service or package:
 - [x] Add authenticated bundle artifact and channel-manifest APIs for control-plane bundle distribution.
 - [x] Add channel artifact endpoint with digest-aware caching semantics and auto-bootstrap for empty environments.
 - [x] Wire local Docker runtime for control-plane + Postgres + OPA bundle polling via service-token authentication.
+- [x] Add control-plane service-token management APIs (list/create/revoke) with hashed token storage.
 - [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
