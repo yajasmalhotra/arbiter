@@ -4,3 +4,9 @@ dist/
 coverage.out
 .env
 apps/control-plane/node_modules/
+apps/control-plane/.next/
+apps/control-plane/.data/
+examples/litellm-harness/.venv/
+.venv/
+__pycache__/
+*.pyc

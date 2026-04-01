@@ -13,6 +13,15 @@ This Next.js application provides an initial governance control plane for Arbite
 - Rollout state APIs:
   - `GET /api/rollouts`
   - `POST /api/rollouts`
+- Bundle APIs:
+  - `GET /api/bundles`
+  - `POST /api/bundles`
+  - `GET /api/bundles/active`
+  - `GET /api/bundles/:id`
+  - `POST /api/bundles/:id/activate`
+  - `GET /api/bundles/activations`
+- Revision APIs:
+  - `GET /api/revisions`
 - Audit read API:
   - `GET /api/audit`
 - Policy test proxy (calls a running Arbiter interceptor):
@@ -31,3 +40,5 @@ npm run dev
 ```
 
 Data is persisted in `apps/control-plane/.data/control-plane.json`.
+
+If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.

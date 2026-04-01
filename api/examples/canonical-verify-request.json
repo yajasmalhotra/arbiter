@@ -1,0 +1,21 @@
+{
+  "token": "<SIGNED_ALLOW_TOKEN>",
+  "request": {
+    "schema_version": "v1alpha1",
+    "metadata": {
+      "request_id": "example-openai-1",
+      "tenant_id": "tenant-demo",
+      "provider": "openai"
+    },
+    "agent_context": {
+      "actor": {
+        "id": "user-1"
+      }
+    },
+    "tool_name": "send_slack_message",
+    "parameters": {
+      "channel": "ops",
+      "message": "deploy complete"
+    }
+  }
+}

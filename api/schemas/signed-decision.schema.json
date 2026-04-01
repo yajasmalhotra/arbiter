@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/schemas/signed-decision.schema.json",
+  "title": "SignedDecision",
+  "type": "object",
+  "required": [
+    "decision"
+  ],
+  "properties": {
+    "decision": {
+      "type": "object",
+      "required": [
+        "allow",
+        "reason",
+        "policy_package",
+        "policy_version",
+        "data_revision",
+        "decision_id"
+      ],
+      "properties": {
+        "allow": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "policy_package": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "data_revision": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "required_context_missing": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "token": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireControlPlaneAuth } from "../../../lib/auth";
 import { listPolicies, upsertPolicy } from "../../../lib/store";
 import type { RolloutState } from "../../../lib/types";
 
@@ -9,6 +10,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const unauthorized = requireControlPlaneAuth(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const body = await request.json();
   const required = ["id", "name", "packageName", "version", "rolloutState", "rules"] as const;
   for (const field of required) {

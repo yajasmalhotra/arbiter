@@ -1,0 +1,2 @@
+# LiteLLM speaks the OpenAI API; the official client works against any compatible base URL.
+openai>=1.40.0

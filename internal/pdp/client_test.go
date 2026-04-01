@@ -87,3 +87,20 @@ func TestClientDecideDeny(t *testing.T) {
 		t.Fatalf("expected deny error, got %v", err)
 	}
 }
+
+func TestClientReady(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", 0)
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+}

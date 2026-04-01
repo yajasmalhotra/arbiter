@@ -35,6 +35,8 @@ func main() {
 	maxParameterBytes := getIntEnv("ARBITER_MAX_PARAMETER_BYTES", 32<<10)
 	stateLookupLimit := getIntEnv("ARBITER_STATE_LOOKUP_LIMIT", 10)
 	fastAllowedTools := getCSVEnv("ARBITER_FAST_ALLOWED_TOOLS")
+	gatewaySharedKey := getEnv("ARBITER_GATEWAY_SHARED_KEY", "")
+	serviceSharedKey := getEnv("ARBITER_SERVICE_SHARED_KEY", "")
 	otelEnabled := getBoolEnv("ARBITER_OTEL_ENABLED", false)
 	otelEndpoint := getEnv("ARBITER_OTEL_ENDPOINT", "")
 	otelInsecure := getBoolEnv("ARBITER_OTEL_INSECURE", true)
@@ -76,6 +78,8 @@ func main() {
 			DecisionTimeout:   decisionTimeout,
 			StateLookupLimit:  stateLookupLimit,
 			FastAllowedTools:  fastAllowedTools,
+			GatewaySharedKey:  gatewaySharedKey,
+			ServiceSharedKey:  serviceSharedKey,
 		},
 		stateStore,
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),

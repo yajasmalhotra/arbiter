@@ -10,6 +10,7 @@ import (
 
 	"arbiter/internal/audit"
 	"arbiter/internal/executorauth"
+	"arbiter/internal/intent"
 	"arbiter/internal/pdp"
 	"arbiter/internal/schema"
 	"arbiter/internal/state"
@@ -26,16 +27,22 @@ type Config struct {
 	DecisionTimeout   time.Duration
 	StateLookupLimit  int
 	FastAllowedTools  []string
+	GatewaySharedKey  string
+	ServiceSharedKey  string
+	IntentLabeler     intent.Labeler
 }
 
 type Service struct {
-	config      Config
-	stateStore  state.Store
-	decider     pdp.Decider
-	issuer      *executorauth.IssuerVerifier
-	audit       audit.Recorder
-	telemetry   telemetry.Recorder
-	fastToolSet map[string]struct{}
+	config           Config
+	stateStore       state.Store
+	decider          pdp.Decider
+	issuer           *executorauth.IssuerVerifier
+	audit            audit.Recorder
+	telemetry        telemetry.Recorder
+	fastToolSet      map[string]struct{}
+	gatewaySharedKey string
+	serviceSharedKey string
+	labeler          intent.Labeler
 }
 
 type verifyExecutionRequest struct {
@@ -57,6 +64,10 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
+type readyChecker interface {
+	Ready(context.Context) error
+}
+
 func NewService(config Config, stateStore state.Store, decider pdp.Decider, issuer *executorauth.IssuerVerifier, auditRecorder audit.Recorder, telemetryRecorder telemetry.Recorder) *Service {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = 1 << 20
@@ -73,6 +84,9 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 	if telemetryRecorder == nil {
 		telemetryRecorder = telemetry.NopRecorder{}
 	}
+	if config.IntentLabeler == nil {
+		config.IntentLabeler = intent.NopLabeler{}
+	}
 
 	fastToolSet := make(map[string]struct{}, len(config.FastAllowedTools))
 	for _, tool := range config.FastAllowedTools {
@@ -84,18 +98,22 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 	}
 
 	return &Service{
-		config:      config,
-		stateStore:  stateStore,
-		decider:     decider,
-		issuer:      issuer,
-		audit:       auditRecorder,
-		telemetry:   telemetryRecorder,
-		fastToolSet: fastToolSet,
+		config:           config,
+		stateStore:       stateStore,
+		decider:          decider,
+		issuer:           issuer,
+		audit:            auditRecorder,
+		telemetry:        telemetryRecorder,
+		fastToolSet:      fastToolSet,
+		gatewaySharedKey: strings.TrimSpace(config.GatewaySharedKey),
+		serviceSharedKey: strings.TrimSpace(config.ServiceSharedKey),
+		labeler:          config.IntentLabeler,
 	}
 }
 
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("POST /v1/intercept/openai", s.handleOpenAIIntercept)
 	mux.HandleFunc("POST /v1/intercept/openai/stream", s.handleOpenAIStreamIntercept)
 	mux.HandleFunc("POST /v1/intercept/openai/stream/race", s.handleOpenAIStreamRaceIntercept)
@@ -112,7 +130,32 @@ func (s *Service) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Service) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), s.config.DecisionTimeout)
+	defer cancel()
+
+	if checker, ok := s.stateStore.(readyChecker); ok {
+		if err := checker.Ready(ctx); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+
+	if checker, ok := s.decider.(readyChecker); ok {
+		if err := checker.Ready(ctx); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
 func (s *Service) handleOpenAIIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var envelope translator.OpenAIEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -124,6 +167,10 @@ func (s *Service) handleOpenAIIntercept(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Service) handleOpenAIStreamIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var streamEnvelope translator.OpenAIStreamEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &streamEnvelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -147,6 +194,10 @@ func (s *Service) handleOpenAIStreamIntercept(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Service) handleOpenAIStreamRaceIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var streamEnvelope translator.OpenAIStreamEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &streamEnvelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -209,6 +260,10 @@ func (s *Service) handleOpenAIInterceptEnvelope(w http.ResponseWriter, r *http.R
 }
 
 func (s *Service) handleOpenAIVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeService(w, r) {
+		return
+	}
+
 	var reqBody verifyExecutionRequest
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -234,6 +289,10 @@ func (s *Service) handleOpenAIVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleAnthropicIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var envelope translator.AnthropicEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -251,6 +310,10 @@ func (s *Service) handleAnthropicIntercept(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Service) handleAnthropicVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeService(w, r) {
+		return
+	}
+
 	var reqBody verifyAnthropicExecutionRequest
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -276,6 +339,10 @@ func (s *Service) handleAnthropicVerify(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Service) handleGenericFrameworkIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var envelope translator.GenericFrameworkEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -293,6 +360,10 @@ func (s *Service) handleGenericFrameworkIntercept(w http.ResponseWriter, r *http
 }
 
 func (s *Service) handleLangChainIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+
 	var envelope translator.LangChainEnvelope
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -310,6 +381,10 @@ func (s *Service) handleLangChainIntercept(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Service) handleCanonicalVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeService(w, r) {
+		return
+	}
+
 	var reqBody verifyCanonicalExecutionRequest
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &reqBody); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -335,6 +410,10 @@ func (s *Service) handleCanonicalVerify(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeService(w, r) {
+		return
+	}
+
 	var record state.ActionRecord
 	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &record); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -349,6 +428,25 @@ func (s *Service) handleRecordAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "recorded"})
 }
 
+func (s *Service) authorizeGateway(w http.ResponseWriter, r *http.Request) bool {
+	return s.authorizeWithKey(w, r, s.gatewaySharedKey, "X-Arbiter-Gateway-Key")
+}
+
+func (s *Service) authorizeService(w http.ResponseWriter, r *http.Request) bool {
+	return s.authorizeWithKey(w, r, s.serviceSharedKey, "X-Arbiter-Service-Key")
+}
+
+func (s *Service) authorizeWithKey(w http.ResponseWriter, r *http.Request, expected, header string) bool {
+	if expected == "" {
+		return true
+	}
+	if r.Header.Get(header) != expected {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return false
+	}
+	return true
+}
+
 func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
 	start := time.Now()
 	req.Metadata.TraceID = traceIDForRequest(r, req.Metadata.TraceID)
@@ -360,6 +458,13 @@ func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Reques
 		attribute.String("tool_name", req.ToolName),
 	)
 	defer span.End()
+
+	if req.IntentLabel == "" && s.labeler != nil {
+		label, err := s.labeler.Label(ctx, req)
+		if err == nil && strings.TrimSpace(label) != "" {
+			req.IntentLabel = strings.TrimSpace(label)
+		}
+	}
 
 	var err error
 	if len(req.RequiredContext) > 0 {

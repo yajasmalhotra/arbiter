@@ -10,6 +10,8 @@ services:
       ARBITER_TOKEN_SECRET: "dev-secret-change-me"
       ARBITER_TOKEN_ISSUER: "arbiter"
       ARBITER_DECISION_TIMEOUT: "1500ms"
+      ARBITER_GATEWAY_SHARED_KEY: ${ARBITER_GATEWAY_SHARED_KEY:-}
+      ARBITER_SERVICE_SHARED_KEY: ${ARBITER_SERVICE_SHARED_KEY:-}
     ports:
       - "8080:8080"
     depends_on:
@@ -41,3 +43,18 @@ services:
       - "no"
     ports:
       - "6379:6379"
+
+  # OpenAI-compatible gateway for client-style tests (examples/litellm-harness without --arbiter-only).
+  # Start with: docker compose --profile litellm up -d
+  # Set OPENAI_API_KEY in your environment or in a deploy/.env file (see deploy/env.example).
+  litellm:
+    profiles: ["litellm"]
+    image: docker.litellm.ai/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-anything}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]

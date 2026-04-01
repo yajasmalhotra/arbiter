@@ -1,0 +1,205 @@
+openapi: 3.1.0
+info:
+  title: Arbiter API
+  version: "0.1.0"
+  description: Published API contract for Arbiter interception, verification, and bundle governance.
+servers:
+  - url: http://localhost:8080
+    description: Arbiter interceptor
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200":
+          description: OK
+  /readyz:
+    get:
+      summary: Dependency readiness probe
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+  /v1/intercept/openai:
+    post:
+      summary: Intercept OpenAI-style tool call
+      parameters:
+        - in: header
+          name: X-Arbiter-Gateway-Key
+          schema:
+            type: string
+          required: false
+          description: Required when gateway auth is enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenAIEnvelope"
+      responses:
+        "200":
+          description: Decision allow with signed token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignedDecision"
+        "403":
+          description: Decision deny
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignedDecision"
+        "401":
+          description: Unauthorized
+  /v1/execute/verify/canonical:
+    post:
+      summary: Verify a signed token against a canonical request
+      parameters:
+        - in: header
+          name: X-Arbiter-Service-Key
+          schema:
+            type: string
+          required: false
+          description: Required when service auth is enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - request
+              properties:
+                token:
+                  type: string
+                request:
+                  $ref: "#/components/schemas/CanonicalRequest"
+      responses:
+        "200":
+          description: Verification passed
+        "403":
+          description: Verification failed
+        "401":
+          description: Unauthorized
+  /v1/state/actions:
+    post:
+      summary: Record prior action context
+      parameters:
+        - in: header
+          name: X-Arbiter-Service-Key
+          schema:
+            type: string
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionRecord"
+      responses:
+        "202":
+          description: Recorded
+        "401":
+          description: Unauthorized
+components:
+  schemas:
+    Metadata:
+      type: object
+      required:
+        - request_id
+        - tenant_id
+      properties:
+        request_id:
+          type: string
+        tenant_id:
+          type: string
+        session_id:
+          type: string
+        trace_id:
+          type: string
+        provider:
+          type: string
+    Actor:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+    AgentContext:
+      type: object
+      required:
+        - actor
+      properties:
+        actor:
+          $ref: "#/components/schemas/Actor"
+        agent_id:
+          type: string
+        run_id:
+          type: string
+    CanonicalRequest:
+      $ref: "./schemas/canonical-request.v1alpha1.schema.json"
+    SignedDecision:
+      $ref: "./schemas/signed-decision.schema.json"
+    OpenAIEnvelope:
+      type: object
+      required:
+        - metadata
+        - agent_context
+        - tool_call
+      properties:
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        agent_context:
+          $ref: "#/components/schemas/AgentContext"
+        required_context:
+          type: array
+          items:
+            type: string
+        tool_call:
+          type: object
+          required:
+            - type
+            - function
+          properties:
+            type:
+              const: function
+            function:
+              type: object
+              required:
+                - name
+                - arguments
+              properties:
+                name:
+                  type: string
+                arguments:
+                  type: string
+    ActionRecord:
+      type: object
+      required:
+        - tenant_id
+        - actor_id
+        - tool_name
+        - outcome
+      properties:
+        tenant_id:
+          type: string
+        actor_id:
+          type: string
+        session_id:
+          type: string
+        tool_name:
+          type: string
+        outcome:
+          type: string
+        at:
+          type: string
+          format: date-time

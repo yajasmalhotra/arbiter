@@ -101,6 +101,24 @@ func (c *Client) Decide(ctx context.Context, req schema.CanonicalRequest) (schem
 	return envelope.Result, nil
 }
 
+func (c *Client) Ready(ctx context.Context) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/health", nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("opa health status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 type StaticDecider struct {
 	Decision schema.Decision
 	Err      error

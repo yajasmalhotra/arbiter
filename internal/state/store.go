@@ -43,6 +43,10 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{records: make(map[string][]schema.PreviousAction)}
 }
 
+func (s *MemoryStore) Ready(_ context.Context) error {
+	return nil
+}
+
 func (s *MemoryStore) RecordAction(_ context.Context, record ActionRecord) error {
 	if record.TenantID == "" || record.ActorID == "" {
 		return ErrMissingLookupKey
@@ -94,6 +98,10 @@ func NewRedisStore(client redis.UniversalClient, prefix string, limit int64) *Re
 		limit = 50
 	}
 	return &RedisStore{client: client, prefix: prefix, limit: limit}
+}
+
+func (s *RedisStore) Ready(ctx context.Context) error {
+	return s.client.Ping(ctx).Err()
 }
 
 func (s *RedisStore) RecordAction(ctx context.Context, record ActionRecord) error {

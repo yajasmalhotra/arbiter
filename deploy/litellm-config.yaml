@@ -1,0 +1,8 @@
+# LiteLLM proxy config for local client-style testing with examples/litellm-harness.
+# Requires OPENAI_API_KEY (set in the environment or deploy/.env when using Docker Compose).
+
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY

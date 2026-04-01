@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "request_id": "example-openai-1",
+    "tenant_id": "tenant-demo",
+    "provider": "openai"
+  },
+  "agent_context": {
+    "actor": {
+      "id": "user-1"
+    }
+  },
+  "tool_call": {
+    "type": "function",
+    "function": {
+      "name": "send_slack_message",
+      "arguments": "{\"channel\":\"ops\",\"message\":\"deploy complete\"}"
+    }
+  }
+}

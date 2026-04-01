@@ -1,4 +1,5 @@
 export type RolloutState = "draft" | "shadow" | "canary" | "enforced" | "rolled_back";
+export type BundleStatus = "draft" | "published" | "active" | "rolled_back";
 
 export type PolicyRecord = {
   id: string;
@@ -20,7 +21,52 @@ export type AuditEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PolicyRevision = {
+  id: string;
+  policyIds: string[];
+  policyVersions: Record<string, string>;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type DataRevision = {
+  id: string;
+  data: Record<string, unknown>;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type BundleSnapshot = {
+  policies: PolicyRecord[];
+  data: Record<string, unknown>;
+};
+
+export type BundleArtifact = {
+  id: string;
+  policyRevisionId: string;
+  dataRevisionId: string;
+  rolloutState: RolloutState;
+  digest: string;
+  status: BundleStatus;
+  createdBy: string;
+  createdAt: string;
+  snapshot: BundleSnapshot;
+};
+
+export type BundleActivation = {
+  id: string;
+  bundleId: string;
+  state: "active" | "rolled_back";
+  activatedBy: string;
+  activatedAt: string;
+  notes?: string;
+};
+
 export type ControlPlaneData = {
   policies: PolicyRecord[];
   auditEvents: AuditEvent[];
+  policyRevisions: PolicyRevision[];
+  dataRevisions: DataRevision[];
+  bundles: BundleArtifact[];
+  bundleActivations: BundleActivation[];
 };

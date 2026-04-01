@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/schemas/canonical-request.v1alpha1.schema.json",
+  "title": "CanonicalRequestV1Alpha1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "metadata",
+    "agent_context",
+    "tool_name",
+    "parameters"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1alpha1"
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "tenant_id"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_context": {
+      "type": "object",
+      "required": [
+        "actor"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string"
+            },
+            "roles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parameters": {},
+    "required_context": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "previous_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "tool_name",
+          "outcome",
+          "at"
+        ],
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "intent_label": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

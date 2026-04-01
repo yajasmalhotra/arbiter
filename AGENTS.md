@@ -160,16 +160,25 @@ When adding a new service or package:
 - [x] Add first-class in-process metrics and `/metrics` endpoint.
 - [x] Expand baseline policy regression coverage for SQL, Slack, Stripe, and temporal context.
 - [x] Add chunk-phase stream intercept route with fast early deny gate.
-- [ ] Build the control-plane application.
+- [x] Add end-to-end integration tests that cover OPA decisioning, Redis-backed replay protection, and required-context history.
+- [x] Add OTLP trace export plumbing and latency SLO instrumentation.
+- [x] Build the control-plane MVP for policy CRUD, rollout-state management, audit views, and request simulation.
+- [x] Add signing-key rotation hardening and pilot readiness documentation.
+- [x] Add local LiteLLM harness examples and Docker wiring for client-style integration tests.
+- [x] Publish first-class API contracts in `api/` (OpenAPI + canonical/decision JSON schemas + examples).
+- [x] Add interceptor readiness endpoint and optional trust-boundary shared-key enforcement for gateway/service routes.
+- [x] Add control-plane bundle lifecycle primitives (publish, activate, active bundle, revision and activation history APIs).
+- [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
+- [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 
 ## Immediate Build Targets
 
 The next code changes should usually start here:
 
-1. `policy/tests/` to add edge-case and adversarial fixtures.
-2. `apps/control-plane/` for governance workflows and simulation.
-3. End-to-end integration tests that exercise OPA, Redis, and replay protection together.
-4. Distributed tracing export plumbing (OTLP) on top of current trace propagation.
+1. `apps/control-plane/` to replace the local JSON-backed persistence with a production datastore and explicit migration/versioning for policy/bundle artifacts.
+2. `deploy/` and runtime wiring to distribute signed OPA bundles from control-plane artifacts into enforcement environments (instead of local mounted policy files).
+3. Add first-class integration packages under `integrations/` for gateway and agent-native adoption paths using the published contracts in `api/`.
+4. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
 
 ## Production Pilot Sequence
 
@@ -180,3 +189,5 @@ Execute these steps in order. After each step, update this section and `README.m
 - [x] Step 3: Add distributed tracing export plumbing (OTLP) and latency SLO instrumentation.
 - [x] Step 4: Build control-plane MVP for policy/data CRUD, rollout states, and audit views.
 - [x] Step 5: Add key rotation hardening and pilot readiness verification checklist.
+- [ ] Step 6: Run the live pilot soak test in the target environment.
+- [ ] Step 7: Validate alerting, dashboards, and OTLP-backed traces against real traffic.

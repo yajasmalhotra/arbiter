@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireControlPlaneAuth } from "../../../../lib/auth";
 import { deletePolicy, getPolicy, upsertPolicy } from "../../../../lib/store";
 import type { RolloutState } from "../../../../lib/types";
 
@@ -13,6 +14,11 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const unauthorized = requireControlPlaneAuth(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const { id } = await params;
   const body = await request.json();
   const existing = await getPolicy(id);
@@ -31,7 +37,12 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   return NextResponse.json({ policy });
 }
 
-export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const unauthorized = requireControlPlaneAuth(request);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const { id } = await params;
   const deleted = await deletePolicy(id);
   if (!deleted) {
