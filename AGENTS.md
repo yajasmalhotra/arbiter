@@ -173,6 +173,7 @@ When adding a new service or package:
 - [x] Add channel artifact endpoint with digest-aware caching semantics and auto-bootstrap for empty environments.
 - [x] Wire local Docker runtime for control-plane + Postgres + OPA bundle polling via service-token authentication.
 - [x] Add control-plane service-token management APIs (list/create/revoke) with hashed token storage.
+- [x] Add signed bundle emission (`.signatures.json`) and OPA key/scope verification wiring in local runtime.
 - [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
 - [x] Add optional non-blocking Postgres audit sink fan-out for interceptor decision events.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
@@ -184,7 +185,7 @@ The next code changes should usually start here:
 
 1. `apps/control-plane/` to complete migration from JSON fallback to production datastore defaults and tenant-aware access controls.
 2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
-3. `deploy/` and runtime wiring to add signed bundle verification and key-management for OPA bundle distribution.
+3. `apps/control-plane/` to add explicit signing-key rotation workflows and audit trails for bundle signature key changes.
 4. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
 5. Package and publish integration SDKs (versioning, changelog, distribution metadata, and semver support policy).
 

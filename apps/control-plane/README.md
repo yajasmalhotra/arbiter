@@ -53,3 +53,8 @@ Set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence a
 
 If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
+Published bundle archives include `.signatures.json` and are signed with:
+
+- `ARBITER_BUNDLE_SIGNING_KEY_ID`
+- `ARBITER_BUNDLE_SIGNING_SCOPE`
+- `ARBITER_BUNDLE_SIGNING_SECRET`

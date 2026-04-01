@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -152,6 +152,9 @@ type BundleManifest = {
   policyRevisionId: string;
   dataRevisionId: string;
   artifactPath: string;
+  signingKeyID: string;
+  signingScope: string;
+  signingAlgorithm: "HS256";
   generatedAt: string;
 };
 
@@ -159,6 +162,13 @@ type ValidatedServiceToken = {
   id: string;
   name: string;
   scopes: string[];
+};
+
+type BundleSigningConfig = {
+  keyID: string;
+  scope: string;
+  secret: string;
+  algorithm: "HS256";
 };
 
 function normalizeScopes(raw: unknown): string[] {
@@ -175,6 +185,21 @@ function parseScopesFromEnv(): string[] {
 
 function tokenHash(rawToken: string): string {
   return createHash("sha256").update(rawToken).digest("hex");
+}
+
+function bundleSigningConfig(): BundleSigningConfig {
+  const keyID = (process.env.ARBITER_BUNDLE_SIGNING_KEY_ID ?? "arbiter_bundle_hs256").trim();
+  const scope = (process.env.ARBITER_BUNDLE_SIGNING_SCOPE ?? "read").trim();
+  const secret = (process.env.ARBITER_BUNDLE_SIGNING_SECRET ?? "dev-bundle-signing-secret").trim();
+  if (!secret) {
+    throw new Error("bundle signing secret is required");
+  }
+  return {
+    keyID: keyID || "arbiter_bundle_hs256",
+    scope: scope || "read",
+    secret,
+    algorithm: "HS256"
+  };
 }
 
 async function ensureBootstrapServiceToken(db: Pool): Promise<void> {
@@ -1123,6 +1148,7 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
   if (!CHANNELS.has(channel)) {
     throw new Error(`invalid channel: ${channel}`);
   }
+  const signing = bundleSigningConfig();
 
   return withDbOrFallback(
     async (db) => {
@@ -1167,6 +1193,9 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         policyRevisionId: String(row.policy_revision_id),
         dataRevisionId: String(row.data_revision_id),
         artifactPath: `/api/bundles/artifacts/${encodeURIComponent(String(row.id))}`,
+        signingKeyID: signing.keyID,
+        signingScope: signing.scope,
+        signingAlgorithm: signing.algorithm,
         generatedAt: new Date().toISOString()
       };
     },
@@ -1194,6 +1223,9 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
           policyRevisionId: promoted.policyRevisionId,
           dataRevisionId: promoted.dataRevisionId,
           artifactPath: `/api/bundles/artifacts/${encodeURIComponent(promoted.id)}`,
+          signingKeyID: signing.keyID,
+          signingScope: signing.scope,
+          signingAlgorithm: signing.algorithm,
           generatedAt: new Date().toISOString()
         };
       }
@@ -1204,6 +1236,9 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         policyRevisionId: bundle.policyRevisionId,
         dataRevisionId: bundle.dataRevisionId,
         artifactPath: `/api/bundles/artifacts/${encodeURIComponent(bundle.id)}`,
+        signingKeyID: signing.keyID,
+        signingScope: signing.scope,
+        signingAlgorithm: signing.algorithm,
         generatedAt: new Date().toISOString()
       };
     }
@@ -1257,9 +1292,69 @@ async function listFilesRecursively(root: string): Promise<string[]> {
   return files;
 }
 
+type BundleArchiveEntry = {
+  name: string;
+  payload: Buffer;
+};
+
+type BundleSignatureFile = {
+  name: string;
+  hash: string;
+  algorithm: "SHA-256";
+};
+
+function isStructuredBundleFile(fileName: string): boolean {
+  return fileName === ".manifest" || fileName.endsWith(".json") || fileName.endsWith(".yaml") || fileName.endsWith(".yml");
+}
+
+function canonicalizeStructuredJSON(raw: Buffer): Buffer {
+  const value = JSON.parse(raw.toString("utf8")) as unknown;
+  return Buffer.from(stableStringify(value), "utf8");
+}
+
+function hashBundleFile(name: string, payload: Buffer): string {
+  if (isStructuredBundleFile(name)) {
+    try {
+      return createHash("sha256").update(canonicalizeStructuredJSON(payload)).digest("hex");
+    } catch {
+      // Fall back to raw bytes if the file cannot be parsed as structured JSON.
+    }
+  }
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+function toBase64URL(payload: Buffer | string): string {
+  const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(payload, "utf8");
+  return raw.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+function signBundleFiles(files: BundleSignatureFile[], signing: BundleSigningConfig, issuedAtUnix: number): string {
+  const header = {
+    alg: signing.algorithm,
+    typ: "JWT",
+    kid: signing.keyID
+  };
+  const payload = {
+    files,
+    scope: signing.scope,
+    keyid: signing.keyID,
+    iat: issuedAtUnix,
+    iss: "arbiter-control-plane"
+  };
+  const signingInput = `${toBase64URL(JSON.stringify(header))}.${toBase64URL(JSON.stringify(payload))}`;
+  const signature = createHmac("sha256", signing.secret).update(signingInput).digest();
+  return `${signingInput}.${toBase64URL(signature)}`;
+}
+
 async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   const pack = tar.pack();
-  const createdAt = new Date().toISOString();
+  const createdAt = bundle.createdAt;
+  const issuedAtUnix = Math.floor(new Date(createdAt).getTime() / 1000);
+  const signing = bundleSigningConfig();
+  const entries: BundleArchiveEntry[] = [];
+  const queueEntry = (name: string, payload: Buffer): void => {
+    entries.push({ name, payload });
+  };
 
   const manifest = {
     revision: bundle.digest,
@@ -1268,10 +1363,12 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
       bundle_id: bundle.id,
       policy_revision_id: bundle.policyRevisionId,
       data_revision_id: bundle.dataRevisionId,
-      created_at: createdAt
+      created_at: createdAt,
+      signing_key_id: signing.keyID,
+      signing_scope: signing.scope
     }
   };
-  await addTarEntry(pack, ".manifest", Buffer.from(JSON.stringify(manifest, null, 2)));
+  queueEntry(".manifest", Buffer.from(JSON.stringify(manifest, null, 2)));
 
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   const policyRoot = path.join(repoRoot, "policy");
@@ -1285,7 +1382,7 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
     for (const file of files) {
       const payload = await readFile(file);
       const name = path.relative(policyRoot, file).replaceAll(path.sep, "/");
-      await addTarEntry(pack, name, payload);
+      queueEntry(name, payload);
     }
   }
 
@@ -1305,10 +1402,37 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   arbiterData.control_plane_bundle = {
     bundle_id: bundle.id,
     digest: bundle.digest,
-    snapshot: bundle.snapshot
+    snapshot: bundle.snapshot,
+    signing: {
+      algorithm: signing.algorithm,
+      key_id: signing.keyID,
+      scope: signing.scope
+    }
   };
-  await addTarEntry(pack, "arbiter.json", Buffer.from(JSON.stringify(arbiterData, null, 2)));
-  await addTarEntry(pack, "snapshot.json", Buffer.from(JSON.stringify(bundle.snapshot, null, 2)));
+  queueEntry("arbiter.json", Buffer.from(JSON.stringify(arbiterData, null, 2)));
+  queueEntry("snapshot.json", Buffer.from(JSON.stringify(bundle.snapshot, null, 2)));
+
+  const signatureFiles: BundleSignatureFile[] = entries.map(({ name, payload }) => ({
+    name,
+    hash: hashBundleFile(name, payload),
+    algorithm: "SHA-256"
+  }));
+  queueEntry(
+    ".signatures.json",
+    Buffer.from(
+      JSON.stringify(
+        {
+          signatures: [signBundleFiles(signatureFiles, signing, issuedAtUnix)]
+        },
+        null,
+        2
+      )
+    )
+  );
+
+  for (const entry of entries) {
+    await addTarEntry(pack, entry.name, entry.payload);
+  }
 
   pack.finalize();
   const tarBuffer = await streamToBuffer(pack);

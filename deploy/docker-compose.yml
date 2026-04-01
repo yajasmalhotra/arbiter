@@ -7,6 +7,9 @@ services:
       ARBITER_DB_URL: "postgres://arbiter:arbiter@postgres:5432/arbiter?sslmode=disable"
       ARBITER_BUNDLE_SERVICE_TOKEN: ${ARBITER_BUNDLE_SERVICE_TOKEN:-dev-bundle-token}
       ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES: ${ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES:-bundle:read}
+      ARBITER_BUNDLE_SIGNING_KEY_ID: ${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}
+      ARBITER_BUNDLE_SIGNING_SCOPE: ${ARBITER_BUNDLE_SIGNING_SCOPE:-read}
+      ARBITER_BUNDLE_SIGNING_SECRET: ${ARBITER_BUNDLE_SIGNING_SECRET:-dev-bundle-signing-secret}
       CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
       ARBITER_TENANT_ID: ${ARBITER_TENANT_ID:-default}
       ARBITER_ACTOR: ${ARBITER_ACTOR:-control-plane}
@@ -60,6 +63,10 @@ services:
       - "--set=bundles.arbiter.resource=/api/bundles/channels/prod/artifact"
       - "--set=bundles.arbiter.polling.min_delay_seconds=5"
       - "--set=bundles.arbiter.polling.max_delay_seconds=20"
+      - "--set=bundles.arbiter.signing.keyid=${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}"
+      - "--set=bundles.arbiter.signing.scope=${ARBITER_BUNDLE_SIGNING_SCOPE:-read}"
+      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.algorithm=HS256"
+      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.key=${ARBITER_BUNDLE_SIGNING_SECRET:-dev-bundle-signing-secret}"
     ports:
       - "8181:8181"
     depends_on:

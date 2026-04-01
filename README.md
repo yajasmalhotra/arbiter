@@ -31,7 +31,7 @@ This starts:
 - **Control Plane** on `http://localhost:3000`
 - **Postgres** on `localhost:5432`
 - **Arbiter** on `http://localhost:8080`
-- **OPA** on `http://localhost:8181` (polling `GET /api/bundles/channels/prod/artifact` from the control-plane)
+- **OPA** on `http://localhost:8181` (polling `GET /api/bundles/channels/prod/artifact` from the control-plane and verifying `.signatures.json`)
 - **Redis** on `localhost:6379`
 
 By default in `deploy/docker-compose.yml`, Arbiter also writes decision audit events into Postgres (`audit_events`) via `ARBITER_AUDIT_POSTGRES_DSN`.
@@ -300,6 +300,12 @@ Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/m
 
 - `ARBITER_BUNDLE_SERVICE_TOKEN`
 - `ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES` (default `bundle:read`)
+
+Signed bundle verification configuration:
+
+- `ARBITER_BUNDLE_SIGNING_KEY_ID` (default `arbiter_bundle_hs256`)
+- `ARBITER_BUNDLE_SIGNING_SCOPE` (default `read`)
+- `ARBITER_BUNDLE_SIGNING_SECRET` (shared by control-plane signing and OPA verification in local Compose)
 
 ## Security Invariants
 
