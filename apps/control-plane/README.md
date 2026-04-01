@@ -15,7 +15,12 @@ This Next.js application provides an initial governance control plane for Arbite
   - `POST /api/rollouts`
 - Audit read API:
   - `GET /api/audit`
-- Dashboard at `/` with policy and audit summaries.
+- Policy test proxy (calls a running Arbiter interceptor):
+  - `POST /api/policies/:id/test` — body: `{ interceptPath?, payload, arbiterBaseUrl? }`. Server uses `ARBITER_URL` (default `http://127.0.0.1:8080`) unless `arbiterBaseUrl` is set.
+- Dashboard at `/` with **AG Grid** policy table, summary pills, and recent audit events.
+- Policy detail at `/policies/:id`: view/edit fields and **Test against Arbiter** (edit JSON body, pick intercept route, run).
+- **Create Policy** at `/policies/new` (sidebar + empty grid CTA). Sidebar: **Dashboard**, **Create Policy**.
+- UI uses **shadcn/ui** (Tailwind CSS, Radix primitives) and **AG Grid** for the policy table.
 
 ## Local Run
 

@@ -1,20 +1,8 @@
-import { listAuditEvents, listPolicies } from "../lib/store";
+import { PoliciesGrid } from "@/components/policies-grid";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const pill = (label: string) => (
-  <span
-    style={{
-      display: "inline-block",
-      marginRight: 8,
-      marginBottom: 6,
-      padding: "2px 8px",
-      border: "1px solid #374151",
-      borderRadius: 999,
-      fontSize: 12
-    }}
-  >
-    {label}
-  </span>
-);
+import { listAuditEvents, listPolicies } from "@/lib/store";
 
 export default async function HomePage() {
   const [policies, auditEvents] = await Promise.all([listPolicies(), listAuditEvents()]);
@@ -24,34 +12,57 @@ export default async function HomePage() {
   }, {});
 
   return (
-    <div style={{ display: "grid", gap: 20 }}>
-      <section style={{ border: "1px solid #1f2937", padding: 16, borderRadius: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Policy Summary</h2>
-        <p style={{ opacity: 0.8 }}>Total policies: {policies.length}</p>
-        <div>{Object.entries(byState).map(([state, count]) => pill(`${state}: ${count}`))}</div>
-      </section>
+    <div className="mx-auto flex max-w-6xl flex-col gap-8">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Open a row to edit and run a live test against Arbiter (server{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">ARBITER_URL</code> or{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">http://127.0.0.1:8080</code>).
+        </p>
+      </div>
 
-      <section style={{ border: "1px solid #1f2937", padding: 16, borderRadius: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Latest Policies</h2>
-        <ul>
-          {policies.slice(0, 10).map((policy) => (
-            <li key={policy.id}>
-              <strong>{policy.name}</strong> - {policy.packageName} ({policy.rolloutState})
-            </li>
-          ))}
-        </ul>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Summary</CardTitle>
+          <CardDescription>Rollout counts across registered policies</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">Total policies: {policies.length}</p>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(byState).map(([state, count]) => (
+              <Badge key={state} variant="secondary">
+                {state}: {count}
+              </Badge>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
-      <section style={{ border: "1px solid #1f2937", padding: 16, borderRadius: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Recent Audit Events</h2>
-        <ul>
-          {auditEvents.slice(0, 10).map((event) => (
-            <li key={event.id}>
-              {event.at} - {event.action} ({event.actor})
-            </li>
-          ))}
-        </ul>
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">All policies</CardTitle>
+          <CardDescription>Sort, filter, and open a policy to edit or test</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <PoliciesGrid policies={policies} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Recent audit events</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="list-inside list-disc space-y-2 text-sm text-muted-foreground">
+            {auditEvents.slice(0, 10).map((event) => (
+              <li key={event.id}>
+                {event.at} — {event.action} ({event.actor})
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }
