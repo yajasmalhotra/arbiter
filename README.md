@@ -208,6 +208,19 @@ cd examples/litellm-harness
 python3 -m unittest test_litellm_arbiter_harness.py -v
 ```
 
+## Integration Packages
+
+First-class integration wrappers live under `integrations/`:
+
+- `integrations/python/arbiter_integrations/litellm.py` for OpenAI/LiteLLM tool-call interception and verification.
+- `integrations/python/arbiter_integrations/openclaw.py` for generic framework/OpenClaw interception and canonical verification.
+
+Run integration unit tests:
+
+```bash
+python3 -m unittest discover integrations/python/tests -v
+```
+
 ## API Surface
 
 - `GET /healthz`: Lightweight health endpoint.

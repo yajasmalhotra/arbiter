@@ -172,6 +172,7 @@ When adding a new service or package:
 - [x] Add authenticated bundle artifact and channel-manifest APIs for control-plane bundle distribution.
 - [x] Add channel artifact endpoint with digest-aware caching semantics and auto-bootstrap for empty environments.
 - [x] Wire local Docker runtime for control-plane + Postgres + OPA bundle polling via service-token authentication.
+- [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 
@@ -182,8 +183,8 @@ The next code changes should usually start here:
 1. `apps/control-plane/` to complete migration from JSON fallback to production datastore defaults and tenant-aware access controls.
 2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
 3. `deploy/` and runtime wiring to add signed bundle verification and key-management for OPA bundle distribution.
-4. Add first-class integration packages under `integrations/` for gateway and agent-native adoption paths using the published contracts in `api/`.
-5. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
+4. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
+5. Package and publish integration SDKs (versioning, changelog, distribution metadata, and semver support policy).
 
 ## Production Pilot Sequence
 
