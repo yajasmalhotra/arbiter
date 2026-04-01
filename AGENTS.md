@@ -176,6 +176,7 @@ When adding a new service or package:
 - [x] Add signed bundle emission (`.signatures.json`) and OPA key/scope verification wiring in local runtime.
 - [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
 - [x] Add optional non-blocking Postgres audit sink fan-out for interceptor decision events.
+- [x] Add pilot soak traffic harness and runbook-backed validation workflow for readiness Steps 6 and 7.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 
@@ -186,7 +187,7 @@ The next code changes should usually start here:
 1. `apps/control-plane/` to complete migration from JSON fallback to production datastore defaults and tenant-aware access controls.
 2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
 3. `apps/control-plane/` to add explicit signing-key rotation workflows and audit trails for bundle signature key changes.
-4. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
+4. Pilot-environment execution: run `tools/pilot/soak_runner.py` in target infra and attach collected artifacts to readiness review.
 5. Package and publish integration SDKs (versioning, changelog, distribution metadata, and semver support policy).
 
 ## Production Pilot Sequence

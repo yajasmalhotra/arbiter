@@ -223,6 +223,22 @@ Run integration unit tests:
 python3 -m unittest discover integrations/python/tests -v
 ```
 
+## Pilot Soak Validation
+
+Run the pilot soak harness to drive sustained allow/deny/replay traffic and validate metrics movement:
+
+```bash
+python3 tools/pilot/soak_runner.py \
+  --arbiter-url http://localhost:8080 \
+  --duration-seconds 900 \
+  --interval-ms 200
+```
+
+Runbook and pass criteria:
+
+- `docs/pilot-soak-runbook.md`
+- `docs/pilot-readiness-checklist.md`
+
 ## API Surface
 
 - `GET /healthz`: Lightweight health endpoint.

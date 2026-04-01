@@ -34,3 +34,8 @@ This checklist is the gate for calling Arbiter production-pilot ready.
 - [x] CI workflow runs `opa test`.
 - [ ] Run live pilot soak test in target environment.
 - [ ] Validate alerting and dashboards against real traffic.
+
+Execution notes:
+
+- Use `python3 tools/pilot/soak_runner.py` to generate sustained allow/deny/replay traffic and validate metrics deltas.
+- Use `docs/pilot-soak-runbook.md` for step-by-step pass criteria and artifact collection.
