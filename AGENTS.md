@@ -168,6 +168,8 @@ When adding a new service or package:
 - [x] Publish first-class API contracts in `api/` (OpenAPI + canonical/decision JSON schemas + examples).
 - [x] Add interceptor readiness endpoint and optional trust-boundary shared-key enforcement for gateway/service routes.
 - [x] Add control-plane bundle lifecycle primitives (publish, activate, active bundle, revision and activation history APIs).
+- [x] Add Postgres-backed control-plane persistence with SQL migrations and JSON-store fallback compatibility.
+- [x] Add authenticated bundle artifact and channel-manifest APIs for control-plane bundle distribution.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 
@@ -175,10 +177,11 @@ When adding a new service or package:
 
 The next code changes should usually start here:
 
-1. `apps/control-plane/` to replace the local JSON-backed persistence with a production datastore and explicit migration/versioning for policy/bundle artifacts.
-2. `deploy/` and runtime wiring to distribute signed OPA bundles from control-plane artifacts into enforcement environments (instead of local mounted policy files).
-3. Add first-class integration packages under `integrations/` for gateway and agent-native adoption paths using the published contracts in `api/`.
-4. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
+1. `apps/control-plane/` to complete migration from JSON fallback to production datastore defaults and tenant-aware access controls.
+2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
+3. `deploy/` and runtime wiring to distribute signed OPA bundles from control-plane artifacts into enforcement environments (instead of local mounted policy files).
+4. Add first-class integration packages under `integrations/` for gateway and agent-native adoption paths using the published contracts in `api/`.
+5. Pilot-environment validation: run the live soak test and validate alerting/dashboards/OTLP traces against real traffic.
 
 ## Production Pilot Sequence
 

@@ -1,154 +1,85 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
+import { promisify } from "node:util";
+import { gzip as gzipCallback } from "node:zlib";
 
+import { Pool } from "pg";
+import tar from "tar-stream";
+
+import { defaultActor, defaultTenantId } from "./context";
+import { dbEnabled, ensureMigrations, getPool } from "./db";
+import * as legacy from "./store_legacy";
 import type {
   AuditEvent,
   BundleActivation,
   BundleArtifact,
-  BundleSnapshot,
-  ControlPlaneData,
   DataRevision,
   PolicyRecord,
   PolicyRevision,
   RolloutState
 } from "./types";
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const DATA_FILE = path.join(DATA_DIR, "control-plane.json");
+const gzip = promisify(gzipCallback);
+const CHANNELS = new Set(["dev", "staging", "prod"]);
 
-const initialData: ControlPlaneData = {
-  policies: [],
-  auditEvents: [],
-  policyRevisions: [],
-  dataRevisions: [],
-  bundles: [],
-  bundleActivations: []
-};
+type BundleChannel = "dev" | "staging" | "prod";
 
-function normalizeData(data: Partial<ControlPlaneData> | undefined): ControlPlaneData {
+function policyFromRow(row: Record<string, unknown>): PolicyRecord {
   return {
-    policies: data?.policies ?? [],
-    auditEvents: data?.auditEvents ?? [],
-    policyRevisions: data?.policyRevisions ?? [],
-    dataRevisions: data?.dataRevisions ?? [],
-    bundles: data?.bundles ?? [],
-    bundleActivations: data?.bundleActivations ?? []
+    id: String(row.id),
+    name: String(row.name),
+    packageName: String(row.package_name),
+    version: String(row.version),
+    rolloutState: String(row.rollout_state) as RolloutState,
+    rules: asObject(row.rules),
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at)
   };
 }
 
-async function readData(): Promise<ControlPlaneData> {
-  try {
-    const raw = await readFile(DATA_FILE, "utf8");
-    return normalizeData(JSON.parse(raw) as Partial<ControlPlaneData>);
-  } catch {
-    return normalizeData(initialData);
-  }
-}
-
-async function writeData(data: ControlPlaneData): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(DATA_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-export async function listPolicies(): Promise<PolicyRecord[]> {
-  const data = await readData();
-  return data.policies.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-export async function getPolicy(id: string): Promise<PolicyRecord | undefined> {
-  const data = await readData();
-  return data.policies.find((policy) => policy.id === id);
-}
-
-export async function upsertPolicy(input: Omit<PolicyRecord, "createdAt" | "updatedAt">): Promise<PolicyRecord> {
-  const data = await readData();
-  const now = new Date().toISOString();
-  const existing = data.policies.find((policy) => policy.id === input.id);
-
-  if (existing) {
-    existing.name = input.name;
-    existing.packageName = input.packageName;
-    existing.version = input.version;
-    existing.rolloutState = input.rolloutState;
-    existing.rules = input.rules;
-    existing.updatedAt = now;
-    await writeData(data);
-    await appendAuditEvent({
-      action: "policy_updated",
-      actor: "control-plane",
-      policyId: existing.id,
-      metadata: { rolloutState: existing.rolloutState }
-    });
-    return existing;
-  }
-
-  const created: PolicyRecord = {
-    ...input,
-    createdAt: now,
-    updatedAt: now
+function bundleFromRow(row: Record<string, unknown>): BundleArtifact {
+  return {
+    id: String(row.id),
+    policyRevisionId: String(row.policy_revision_id),
+    dataRevisionId: String(row.data_revision_id),
+    rolloutState: String(row.rollout_state) as RolloutState,
+    digest: String(row.digest),
+    status: String(row.status) as BundleArtifact["status"],
+    createdBy: String(row.created_by),
+    createdAt: toISOString(row.created_at),
+    snapshot: asObject(row.snapshot) as BundleArtifact["snapshot"]
   };
-  data.policies.push(created);
-  await writeData(data);
-  await appendAuditEvent({
-    action: "policy_created",
-    actor: "control-plane",
-    policyId: created.id,
-    metadata: { rolloutState: created.rolloutState }
-  });
-  return created;
 }
 
-export async function deletePolicy(id: string): Promise<boolean> {
-  const data = await readData();
-  const before = data.policies.length;
-  data.policies = data.policies.filter((policy) => policy.id !== id);
-  if (data.policies.length == before) {
-    return false;
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
   }
-  await writeData(data);
-  await appendAuditEvent({
-    action: "policy_deleted",
-    actor: "control-plane",
-    policyId: id
-  });
-  return true;
+  return value as Record<string, unknown>;
 }
 
-export async function setRolloutState(id: string, rolloutState: RolloutState): Promise<PolicyRecord | undefined> {
-  const data = await readData();
-  const policy = data.policies.find((item) => item.id === id);
-  if (!policy) {
-    return undefined;
+function asArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
-
-  policy.rolloutState = rolloutState;
-  policy.updatedAt = new Date().toISOString();
-  await writeData(data);
-  await appendAuditEvent({
-    action: "rollout_state_changed",
-    actor: "control-plane",
-    policyId: id,
-    metadata: { rolloutState }
-  });
-  return policy;
+  return value;
 }
 
-export async function listAuditEvents(): Promise<AuditEvent[]> {
-  const data = await readData();
-  return data.auditEvents.sort((a, b) => b.at.localeCompare(a.at));
+function asStringMap(value: unknown): Record<string, string> {
+  const obj = asObject(value);
+  const parsed: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(obj)) {
+    parsed[key] = String(raw);
+  }
+  return parsed;
 }
 
-export async function appendAuditEvent(event: Omit<AuditEvent, "id" | "at">): Promise<AuditEvent> {
-  const data = await readData();
-  const created: AuditEvent = {
-    ...event,
-    id: crypto.randomUUID(),
-    at: new Date().toISOString()
-  };
-  data.auditEvents.push(created);
-  await writeData(data);
-  return created;
+function toISOString(value: unknown): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return new Date(String(value)).toISOString();
 }
 
 function stableStringify(value: unknown): string {
@@ -165,8 +96,23 @@ function stableStringify(value: unknown): string {
     .join(",")}}`;
 }
 
-function bundleDigest(snapshot: BundleSnapshot): string {
-  return crypto.createHash("sha256").update(stableStringify(snapshot)).digest("hex");
+function bundleDigest(snapshot: BundleArtifact["snapshot"]): string {
+  return createHash("sha256").update(stableStringify(snapshot)).digest("hex");
+}
+
+async function withDbOrFallback<T>(
+  run: (db: Pool) => Promise<T>,
+  fallback: () => Promise<T>
+): Promise<T> {
+  if (!dbEnabled()) {
+    return fallback();
+  }
+  await ensureMigrations();
+  const db = getPool();
+  if (!db) {
+    return fallback();
+  }
+  return run(db);
 }
 
 type PublishBundleInput = {
@@ -176,150 +122,1041 @@ type PublishBundleInput = {
   actor?: string;
 };
 
-export async function listBundles(): Promise<BundleArtifact[]> {
-  const data = await readData();
-  return data.bundles.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export async function getBundle(id: string): Promise<BundleArtifact | undefined> {
-  const data = await readData();
-  return data.bundles.find((bundle) => bundle.id === id);
-}
-
-export async function getActiveBundle(): Promise<BundleArtifact | undefined> {
-  const data = await readData();
-  return data.bundles.find((bundle) => bundle.status === "active");
-}
-
-export async function listPolicyRevisions(): Promise<PolicyRevision[]> {
-  const data = await readData();
-  return data.policyRevisions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export async function listDataRevisions(): Promise<DataRevision[]> {
-  const data = await readData();
-  return data.dataRevisions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export async function listBundleActivations(): Promise<BundleActivation[]> {
-  const data = await readData();
-  return data.bundleActivations.sort((a, b) => b.activatedAt.localeCompare(a.activatedAt));
-}
-
-export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
-  const data = await readData();
-  const now = new Date().toISOString();
-  const actor = input.actor?.trim() || "control-plane";
-
-  const selectedPolicies = (input.policyIds?.length
-    ? data.policies.filter((policy) => input.policyIds?.includes(policy.id))
-    : data.policies
-  ).map((policy) => ({ ...policy }));
-
-  if (selectedPolicies.length === 0) {
-    throw new Error("no policies available to publish");
-  }
-
-  const policyRevision: PolicyRevision = {
-    id: `pr_${crypto.randomUUID()}`,
-    policyIds: selectedPolicies.map((policy) => policy.id),
-    policyVersions: Object.fromEntries(selectedPolicies.map((policy) => [policy.id, policy.version])),
-    createdBy: actor,
-    createdAt: now
-  };
-  data.policyRevisions.push(policyRevision);
-
-  const dataRevision: DataRevision = {
-    id: `dr_${crypto.randomUUID()}`,
-    data: input.data ?? {},
-    createdBy: actor,
-    createdAt: now
-  };
-  data.dataRevisions.push(dataRevision);
-
-  const snapshot: BundleSnapshot = {
-    policies: selectedPolicies,
-    data: dataRevision.data
-  };
-  const bundle: BundleArtifact = {
-    id: `bundle_${crypto.randomUUID()}`,
-    policyRevisionId: policyRevision.id,
-    dataRevisionId: dataRevision.id,
-    rolloutState: input.rolloutState ?? "draft",
-    digest: bundleDigest(snapshot),
-    status: "published",
-    createdBy: actor,
-    createdAt: now,
-    snapshot
-  };
-  data.bundles.push(bundle);
-
-  await writeData(data);
-  await appendAuditEvent({
-    action: "bundle_published",
-    actor,
-    metadata: {
-      bundleId: bundle.id,
-      digest: bundle.digest,
-      policyRevisionId: bundle.policyRevisionId,
-      dataRevisionId: bundle.dataRevisionId,
-      rolloutState: bundle.rolloutState
-    }
-  });
-
-  return bundle;
-}
-
 type ActivateBundleInput = {
   actor?: string;
   notes?: string;
 };
 
-export async function activateBundle(id: string, input: ActivateBundleInput = {}): Promise<BundleArtifact | undefined> {
-  const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+type PromoteBundleInput = {
+  actor?: string;
+  notes?: string;
+};
+
+type BundleManifest = {
+  channel: BundleChannel;
+  bundleId: string;
+  digest: string;
+  policyRevisionId: string;
+  dataRevisionId: string;
+  artifactPath: string;
+  generatedAt: string;
+};
+
+type ValidatedServiceToken = {
+  id: string;
+  name: string;
+  scopes: string[];
+};
+
+function normalizeScopes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.map((entry) => String(entry).trim()).filter((scope) => scope.length > 0);
+}
+
+function parseScopesFromEnv(): string[] {
+  const raw = process.env.ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES ?? "bundle:read";
+  return raw.split(",").map((scope) => scope.trim()).filter((scope) => scope.length > 0);
+}
+
+function tokenHash(rawToken: string): string {
+  return createHash("sha256").update(rawToken).digest("hex");
+}
+
+async function ensureBootstrapServiceToken(db: Pool): Promise<void> {
+  const raw = (process.env.ARBITER_BUNDLE_SERVICE_TOKEN ?? "").trim();
+  if (!raw) {
+    return;
+  }
+
   const now = new Date().toISOString();
+  const scopes = parseScopesFromEnv();
+  await db.query(
+    `
+      INSERT INTO service_tokens (
+        id, tenant_id, name, token_hash, scopes, created_by, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+      ON CONFLICT (token_hash) DO NOTHING
+    `,
+    [
+      "st_bootstrap",
+      defaultTenantId(),
+      "bootstrap-bundle-reader",
+      tokenHash(raw),
+      JSON.stringify(scopes),
+      defaultActor(),
+      now
+    ]
+  );
+}
 
-  const target = data.bundles.find((bundle) => bundle.id === id);
-  if (!target) {
-    return undefined;
+function hasScope(scopes: string[], required: string): boolean {
+  if (required.trim() === "") {
+    return true;
+  }
+  return scopes.includes(required) || scopes.includes("*");
+}
+
+export async function validateServiceToken(
+  rawToken: string,
+  requiredScope: string
+): Promise<ValidatedServiceToken | null> {
+  const candidate = rawToken.trim();
+  if (!candidate) {
+    return null;
   }
 
-  for (const bundle of data.bundles) {
-    if (bundle.status === "active" && bundle.id !== id) {
-      bundle.status = "rolled_back";
-      data.bundleActivations.push({
-        id: `ba_${crypto.randomUUID()}`,
-        bundleId: bundle.id,
-        state: "rolled_back",
-        activatedBy: actor,
-        activatedAt: now,
-        notes: `superseded by ${id}`
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapServiceToken(db);
+      const result = await db.query(
+        `
+          SELECT id, name, scopes
+          FROM service_tokens
+          WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL
+          LIMIT 1
+        `,
+        [defaultTenantId(), tokenHash(candidate)]
+      );
+      if (!result.rowCount) {
+        return null;
+      }
+
+      const row = result.rows[0] as Record<string, unknown>;
+      const scopes = normalizeScopes(row.scopes);
+      if (!hasScope(scopes, requiredScope)) {
+        return null;
+      }
+
+      await db.query("UPDATE service_tokens SET last_used_at = $1 WHERE id = $2", [
+        new Date().toISOString(),
+        String(row.id)
+      ]);
+      return {
+        id: String(row.id),
+        name: String(row.name),
+        scopes
+      };
+    },
+    async () => {
+      const bootstrap = (process.env.ARBITER_BUNDLE_SERVICE_TOKEN ?? "").trim();
+      if (!bootstrap || bootstrap !== candidate) {
+        return null;
+      }
+      const scopes = parseScopesFromEnv();
+      if (!hasScope(scopes, requiredScope)) {
+        return null;
+      }
+      return {
+        id: "st_bootstrap",
+        name: "bootstrap-bundle-reader",
+        scopes
+      };
+    }
+  );
+}
+
+export async function listPolicies(): Promise<PolicyRecord[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, name, package_name, version, rollout_state, rules, created_at, updated_at
+          FROM policies
+          WHERE tenant_id = $1
+          ORDER BY updated_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => policyFromRow(row as Record<string, unknown>));
+    },
+    async () => legacy.listPolicies()
+  );
+}
+
+export async function getPolicy(id: string): Promise<PolicyRecord | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, name, package_name, version, rollout_state, rules, created_at, updated_at
+          FROM policies
+          WHERE tenant_id = $1 AND id = $2
+          LIMIT 1
+        `,
+        [defaultTenantId(), id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      return policyFromRow(result.rows[0] as Record<string, unknown>);
+    },
+    async () => legacy.getPolicy(id)
+  );
+}
+
+export async function upsertPolicy(input: Omit<PolicyRecord, "createdAt" | "updatedAt">): Promise<PolicyRecord> {
+  return withDbOrFallback(
+    async (db) => {
+      const now = new Date().toISOString();
+      const result = await db.query(
+        `
+          INSERT INTO policies (
+            id, tenant_id, name, package_name, version, rollout_state, rules, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8)
+          ON CONFLICT (id) DO UPDATE
+          SET name = EXCLUDED.name,
+              package_name = EXCLUDED.package_name,
+              version = EXCLUDED.version,
+              rollout_state = EXCLUDED.rollout_state,
+              rules = EXCLUDED.rules,
+              updated_at = EXCLUDED.updated_at
+          RETURNING id, name, package_name, version, rollout_state, rules, created_at, updated_at
+        `,
+        [
+          input.id,
+          defaultTenantId(),
+          input.name,
+          input.packageName,
+          input.version,
+          input.rolloutState,
+          JSON.stringify(input.rules ?? {}),
+          now
+        ]
+      );
+
+      const policy = policyFromRow(result.rows[0] as Record<string, unknown>);
+      await appendAuditEvent({
+        action: "policy_updated",
+        actor: defaultActor(),
+        policyId: policy.id,
+        metadata: {
+          rolloutState: policy.rolloutState
+        }
       });
+      return policy;
+    },
+    async () => legacy.upsertPolicy(input)
+  );
+}
+
+export async function deletePolicy(id: string): Promise<boolean> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query("DELETE FROM policies WHERE tenant_id = $1 AND id = $2", [
+        defaultTenantId(),
+        id
+      ]);
+      if (!result.rowCount) {
+        return false;
+      }
+      await appendAuditEvent({
+        action: "policy_deleted",
+        actor: defaultActor(),
+        policyId: id
+      });
+      return true;
+    },
+    async () => legacy.deletePolicy(id)
+  );
+}
+
+export async function setRolloutState(id: string, rolloutState: RolloutState): Promise<PolicyRecord | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          UPDATE policies
+          SET rollout_state = $1, updated_at = $2
+          WHERE tenant_id = $3 AND id = $4
+          RETURNING id, name, package_name, version, rollout_state, rules, created_at, updated_at
+        `,
+        [rolloutState, new Date().toISOString(), defaultTenantId(), id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      const policy = policyFromRow(result.rows[0] as Record<string, unknown>);
+      await appendAuditEvent({
+        action: "rollout_state_changed",
+        actor: defaultActor(),
+        policyId: id,
+        metadata: { rolloutState }
+      });
+      return policy;
+    },
+    async () => legacy.setRolloutState(id, rolloutState)
+  );
+}
+
+export async function listAuditEvents(): Promise<AuditEvent[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, action, actor, policy_id, at, metadata
+          FROM audit_events
+          WHERE tenant_id = $1
+          ORDER BY at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return {
+          id: String(record.id),
+          action: String(record.action),
+          actor: String(record.actor),
+          policyId: record.policy_id ? String(record.policy_id) : undefined,
+          at: toISOString(record.at),
+          metadata: asObject(record.metadata)
+        };
+      });
+    },
+    async () => legacy.listAuditEvents()
+  );
+}
+
+export async function appendAuditEvent(event: Omit<AuditEvent, "id" | "at">): Promise<AuditEvent> {
+  return withDbOrFallback(
+    async (db) => {
+      const created: AuditEvent = {
+        ...event,
+        id: randomUUID(),
+        at: new Date().toISOString()
+      };
+      await db.query(
+        `
+          INSERT INTO audit_events (id, tenant_id, action, actor, policy_id, at, metadata)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+        `,
+        [
+          created.id,
+          defaultTenantId(),
+          created.action,
+          created.actor,
+          created.policyId ?? null,
+          created.at,
+          JSON.stringify(created.metadata ?? {})
+        ]
+      );
+      return created;
+    },
+    async () => legacy.appendAuditEvent(event)
+  );
+}
+
+export async function listBundles(): Promise<BundleArtifact[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+          FROM bundles
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => bundleFromRow(row as Record<string, unknown>));
+    },
+    async () => legacy.listBundles()
+  );
+}
+
+export async function getBundle(id: string): Promise<BundleArtifact | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+          FROM bundles
+          WHERE tenant_id = $1 AND id = $2
+          LIMIT 1
+        `,
+        [defaultTenantId(), id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      return bundleFromRow(result.rows[0] as Record<string, unknown>);
+    },
+    async () => legacy.getBundle(id)
+  );
+}
+
+export async function getActiveBundle(): Promise<BundleArtifact | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const channelResult = await db.query(
+        `
+          SELECT b.id, b.policy_revision_id, b.data_revision_id, b.rollout_state, b.digest, b.status, b.created_by, b.created_at, b.snapshot
+          FROM bundle_channels c
+          JOIN bundles b ON b.id = c.bundle_id
+          WHERE c.tenant_id = $1 AND c.channel = 'prod'
+          LIMIT 1
+        `,
+        [defaultTenantId()]
+      );
+      if (channelResult.rowCount) {
+        return bundleFromRow(channelResult.rows[0] as Record<string, unknown>);
+      }
+
+      const fallback = await db.query(
+        `
+          SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+          FROM bundles
+          WHERE tenant_id = $1 AND status = 'active'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [defaultTenantId()]
+      );
+      if (!fallback.rowCount) {
+        return undefined;
+      }
+      return bundleFromRow(fallback.rows[0] as Record<string, unknown>);
+    },
+    async () => legacy.getActiveBundle()
+  );
+}
+
+export async function listPolicyRevisions(): Promise<PolicyRevision[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, policy_ids, policy_versions, created_by, created_at
+          FROM policy_revisions
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return {
+          id: String(record.id),
+          policyIds: asArray(record.policy_ids).map((value) => String(value)),
+          policyVersions: asStringMap(record.policy_versions),
+          createdBy: String(record.created_by),
+          createdAt: toISOString(record.created_at)
+        };
+      });
+    },
+    async () => legacy.listPolicyRevisions()
+  );
+}
+
+export async function listDataRevisions(): Promise<DataRevision[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, data, created_by, created_at
+          FROM data_revisions
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return {
+          id: String(record.id),
+          data: asObject(record.data),
+          createdBy: String(record.created_by),
+          createdAt: toISOString(record.created_at)
+        };
+      });
+    },
+    async () => legacy.listDataRevisions()
+  );
+}
+
+export async function listBundleActivations(): Promise<BundleActivation[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, bundle_id, channel, state, activated_by, activated_at, notes
+          FROM bundle_activations
+          WHERE tenant_id = $1
+          ORDER BY activated_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return {
+          id: String(record.id),
+          bundleId: String(record.bundle_id),
+          channel: String(record.channel) as BundleChannel,
+          state: String(record.state) as BundleActivation["state"],
+          activatedBy: String(record.activated_by),
+          activatedAt: toISOString(record.activated_at),
+          notes: record.notes ? String(record.notes) : undefined
+        };
+      });
+    },
+    async () => {
+      const activations = await legacy.listBundleActivations();
+      return activations.map((activation) => ({
+        ...activation,
+        channel: (activation.channel ?? "prod") as BundleChannel
+      }));
     }
+  );
+}
+
+export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
+  return withDbOrFallback(
+    async (db) => {
+      const now = new Date().toISOString();
+      const actor = input.actor?.trim() || defaultActor();
+      const tenant = defaultTenantId();
+
+      const selectedPoliciesResult = input.policyIds?.length
+        ? await db.query(
+            `
+              SELECT id, name, package_name, version, rollout_state, rules, created_at, updated_at
+              FROM policies
+              WHERE tenant_id = $1 AND id = ANY($2::text[])
+              ORDER BY updated_at DESC
+            `,
+            [tenant, input.policyIds]
+          )
+        : await db.query(
+            `
+              SELECT id, name, package_name, version, rollout_state, rules, created_at, updated_at
+              FROM policies
+              WHERE tenant_id = $1
+              ORDER BY updated_at DESC
+            `,
+            [tenant]
+          );
+
+      const selectedPolicies = selectedPoliciesResult.rows.map((row) => policyFromRow(row as Record<string, unknown>));
+      if (selectedPolicies.length === 0) {
+        throw new Error("no policies available to publish");
+      }
+
+      const policyRevisionId = `pr_${randomUUID()}`;
+      const dataRevisionId = `dr_${randomUUID()}`;
+      const bundleId = `bundle_${randomUUID()}`;
+      const snapshot: BundleArtifact["snapshot"] = {
+        policies: selectedPolicies,
+        data: input.data ?? {}
+      };
+      const bundle: BundleArtifact = {
+        id: bundleId,
+        policyRevisionId,
+        dataRevisionId,
+        rolloutState: input.rolloutState ?? "draft",
+        digest: bundleDigest(snapshot),
+        status: "published",
+        createdBy: actor,
+        createdAt: now,
+        snapshot
+      };
+
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `
+            INSERT INTO policy_revisions (id, tenant_id, policy_ids, policy_versions, created_by, created_at)
+            VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+          `,
+          [
+            policyRevisionId,
+            tenant,
+            JSON.stringify(selectedPolicies.map((policy) => policy.id)),
+            JSON.stringify(Object.fromEntries(selectedPolicies.map((policy) => [policy.id, policy.version]))),
+            actor,
+            now
+          ]
+        );
+        await client.query(
+          `
+            INSERT INTO data_revisions (id, tenant_id, data, created_by, created_at)
+            VALUES ($1, $2, $3::jsonb, $4, $5)
+          `,
+          [dataRevisionId, tenant, JSON.stringify(input.data ?? {}), actor, now]
+        );
+        await client.query(
+          `
+            INSERT INTO bundles (
+              id, tenant_id, policy_revision_id, data_revision_id,
+              rollout_state, digest, status, created_by, created_at, snapshot
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+          `,
+          [
+            bundle.id,
+            tenant,
+            bundle.policyRevisionId,
+            bundle.dataRevisionId,
+            bundle.rolloutState,
+            bundle.digest,
+            bundle.status,
+            bundle.createdBy,
+            bundle.createdAt,
+            JSON.stringify(bundle.snapshot)
+          ]
+        );
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      await appendAuditEvent({
+        action: "bundle_published",
+        actor,
+        metadata: {
+          bundleId: bundle.id,
+          digest: bundle.digest,
+          policyRevisionId: bundle.policyRevisionId,
+          dataRevisionId: bundle.dataRevisionId,
+          rolloutState: bundle.rolloutState
+        }
+      });
+
+      return bundle;
+    },
+    async () => legacy.publishBundle(input)
+  );
+}
+
+export async function activateBundle(id: string, input: ActivateBundleInput = {}): Promise<BundleArtifact | undefined> {
+  return promoteBundle(id, "prod", input);
+}
+
+export async function promoteBundle(
+  bundleID: string,
+  channel: BundleChannel,
+  input: PromoteBundleInput = {}
+): Promise<BundleArtifact | undefined> {
+  if (!CHANNELS.has(channel)) {
+    throw new Error(`invalid channel: ${channel}`);
   }
 
-  target.status = "active";
-  if (target.rolloutState !== "rolled_back") {
-    target.rolloutState = "enforced";
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const actor = input.actor?.trim() || defaultActor();
+      const now = new Date().toISOString();
+
+      const client = await db.connect();
+      let promoted: BundleArtifact | undefined;
+      try {
+        await client.query("BEGIN");
+
+        const targetResult = await client.query(
+          `
+            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+            FROM bundles
+            WHERE tenant_id = $1 AND id = $2
+            LIMIT 1
+          `,
+          [tenant, bundleID]
+        );
+        if (!targetResult.rowCount) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+
+        const currentResult = await client.query(
+          `
+            SELECT bundle_id
+            FROM bundle_channels
+            WHERE tenant_id = $1 AND channel = $2
+            LIMIT 1
+          `,
+          [tenant, channel]
+        );
+
+        if (currentResult.rowCount) {
+          const currentBundleID = String((currentResult.rows[0] as Record<string, unknown>).bundle_id);
+          if (currentBundleID !== bundleID) {
+            await client.query(
+              "UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2 AND status = 'active'",
+              [tenant, currentBundleID]
+            );
+            await client.query(
+              `
+                INSERT INTO bundle_activations (
+                  id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+                )
+                VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
+              `,
+              [randomUUID(), tenant, currentBundleID, channel, actor, now, `superseded by ${bundleID}`]
+            );
+          }
+        }
+
+        await client.query(
+          `
+            INSERT INTO bundle_channels (tenant_id, channel, bundle_id, updated_by, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (tenant_id, channel)
+            DO UPDATE SET bundle_id = EXCLUDED.bundle_id, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at
+          `,
+          [tenant, channel, bundleID, actor, now]
+        );
+
+        await client.query(
+          `
+            UPDATE bundles
+            SET status = 'active',
+                rollout_state = CASE WHEN $3 = 'prod' AND rollout_state != 'rolled_back' THEN 'enforced' ELSE rollout_state END
+            WHERE tenant_id = $1 AND id = $2
+          `,
+          [tenant, bundleID, channel]
+        );
+
+        await client.query(
+          `
+            INSERT INTO bundle_activations (
+              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+            )
+            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
+          `,
+          [randomUUID(), tenant, bundleID, channel, actor, now, input.notes ?? null]
+        );
+
+        const promotedResult = await client.query(
+          `
+            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+            FROM bundles
+            WHERE tenant_id = $1 AND id = $2
+            LIMIT 1
+          `,
+          [tenant, bundleID]
+        );
+        promoted = promotedResult.rowCount
+          ? bundleFromRow(promotedResult.rows[0] as Record<string, unknown>)
+          : undefined;
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (promoted) {
+        await appendAuditEvent({
+          action: "bundle_promoted",
+          actor,
+          metadata: {
+            channel,
+            bundleId: promoted.id,
+            digest: promoted.digest,
+            notes: input.notes ?? ""
+          }
+        });
+      }
+      return promoted;
+    },
+    async () => {
+      if (channel !== "prod") {
+        return undefined;
+      }
+      return legacy.activateBundle(bundleID, input);
+    }
+  );
+}
+
+export async function rollbackChannel(
+  channel: BundleChannel,
+  input: PromoteBundleInput = {}
+): Promise<BundleArtifact | undefined> {
+  if (!CHANNELS.has(channel)) {
+    throw new Error(`invalid channel: ${channel}`);
   }
-  data.bundleActivations.push({
-    id: `ba_${crypto.randomUUID()}`,
-    bundleId: id,
-    state: "active",
-    activatedBy: actor,
-    activatedAt: now,
-    notes: input.notes
+
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const actor = input.actor?.trim() || defaultActor();
+      const now = new Date().toISOString();
+
+      const client = await db.connect();
+      let restored: BundleArtifact | undefined;
+      try {
+        await client.query("BEGIN");
+
+        const currentResult = await client.query(
+          `
+            SELECT bundle_id
+            FROM bundle_channels
+            WHERE tenant_id = $1 AND channel = $2
+            LIMIT 1
+          `,
+          [tenant, channel]
+        );
+        if (!currentResult.rowCount) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+        const currentBundleID = String((currentResult.rows[0] as Record<string, unknown>).bundle_id);
+
+        const previousResult = await client.query(
+          `
+            SELECT bundle_id
+            FROM bundle_activations
+            WHERE tenant_id = $1 AND channel = $2 AND state = 'active' AND bundle_id != $3
+            ORDER BY activated_at DESC
+            LIMIT 1
+          `,
+          [tenant, channel, currentBundleID]
+        );
+        if (!previousResult.rowCount) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+        const previousBundleID = String((previousResult.rows[0] as Record<string, unknown>).bundle_id);
+
+        await client.query(
+          `
+            UPDATE bundle_channels
+            SET bundle_id = $1, updated_by = $2, updated_at = $3
+            WHERE tenant_id = $4 AND channel = $5
+          `,
+          [previousBundleID, actor, now, tenant, channel]
+        );
+        await client.query(
+          "UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2",
+          [tenant, currentBundleID]
+        );
+        await client.query("UPDATE bundles SET status = 'active' WHERE tenant_id = $1 AND id = $2", [
+          tenant,
+          previousBundleID
+        ]);
+        await client.query(
+          `
+            INSERT INTO bundle_activations (
+              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+            )
+            VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
+          `,
+          [randomUUID(), tenant, currentBundleID, channel, actor, now, input.notes ?? "manual rollback"]
+        );
+        await client.query(
+          `
+            INSERT INTO bundle_activations (
+              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+            )
+            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
+          `,
+          [randomUUID(), tenant, previousBundleID, channel, actor, now, input.notes ?? "rollback restore"]
+        );
+
+        const restoredResult = await client.query(
+          `
+            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+            FROM bundles
+            WHERE tenant_id = $1 AND id = $2
+            LIMIT 1
+          `,
+          [tenant, previousBundleID]
+        );
+        restored = restoredResult.rowCount
+          ? bundleFromRow(restoredResult.rows[0] as Record<string, unknown>)
+          : undefined;
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (restored) {
+        await appendAuditEvent({
+          action: "bundle_rolled_back",
+          actor,
+          metadata: {
+            channel,
+            restoredBundleId: restored.id,
+            notes: input.notes ?? ""
+          }
+        });
+      }
+
+      return restored;
+    },
+    async () => undefined
+  );
+}
+
+export async function getChannelManifest(channel: BundleChannel): Promise<BundleManifest | null> {
+  if (!CHANNELS.has(channel)) {
+    throw new Error(`invalid channel: ${channel}`);
+  }
+
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id
+          FROM bundle_channels c
+          JOIN bundles b ON b.id = c.bundle_id
+          WHERE c.tenant_id = $1 AND c.channel = $2
+          LIMIT 1
+        `,
+        [defaultTenantId(), channel]
+      );
+      if (!result.rowCount) {
+        return null;
+      }
+      const row = result.rows[0] as Record<string, unknown>;
+      return {
+        channel,
+        bundleId: String(row.id),
+        digest: String(row.digest),
+        policyRevisionId: String(row.policy_revision_id),
+        dataRevisionId: String(row.data_revision_id),
+        artifactPath: `/api/bundles/artifacts/${encodeURIComponent(String(row.id))}`,
+        generatedAt: new Date().toISOString()
+      };
+    },
+    async () => {
+      if (channel !== "prod") {
+        return null;
+      }
+      const bundle = await legacy.getActiveBundle();
+      if (!bundle) {
+        return null;
+      }
+      return {
+        channel: "prod",
+        bundleId: bundle.id,
+        digest: bundle.digest,
+        policyRevisionId: bundle.policyRevisionId,
+        dataRevisionId: bundle.dataRevisionId,
+        artifactPath: `/api/bundles/artifacts/${encodeURIComponent(bundle.id)}`,
+        generatedAt: new Date().toISOString()
+      };
+    }
+  );
+}
+
+async function addTarEntry(pack: tar.Pack, name: string, payload: Buffer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    pack.entry({ name, mode: 0o644 }, payload, (err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
   });
+}
 
-  await writeData(data);
-  await appendAuditEvent({
-    action: "bundle_activated",
-    actor,
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  return new Promise<Buffer>((resolve, reject) => {
+    stream.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("error", reject);
+  });
+}
+
+async function listFilesRecursively(root: string): Promise<string[]> {
+  let files: string[] = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files = files.concat(await listFilesRecursively(fullPath));
+      continue;
+    }
+    files.push(fullPath);
+  }
+  return files;
+}
+
+async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
+  const pack = tar.pack();
+  const createdAt = new Date().toISOString();
+
+  const manifest = {
+    revision: bundle.digest,
+    roots: [""],
     metadata: {
-      bundleId: id,
-      notes: input.notes ?? ""
+      bundle_id: bundle.id,
+      policy_revision_id: bundle.policyRevisionId,
+      data_revision_id: bundle.dataRevisionId,
+      created_at: createdAt
     }
-  });
-  return target;
+  };
+  await addTarEntry(pack, ".manifest", Buffer.from(JSON.stringify(manifest, null, 2)));
+
+  const repoRoot = path.resolve(process.cwd(), "..", "..");
+  const policyRoot = path.join(repoRoot, "policy");
+  const coreRoot = path.join(policyRoot, "core");
+  const domainRoot = path.join(policyRoot, "domain");
+
+  for (const root of [coreRoot, domainRoot]) {
+    const files = (await listFilesRecursively(root)).filter((file) => file.endsWith(".rego")).sort((a, b) =>
+      a.localeCompare(b)
+    );
+    for (const file of files) {
+      const payload = await readFile(file);
+      const name = path.relative(policyRoot, file).replaceAll(path.sep, "/");
+      await addTarEntry(pack, name, payload);
+    }
+  }
+
+  const arbiterDataPath = path.join(policyRoot, "arbiter.json");
+  let arbiterData: Record<string, unknown> = {};
+  try {
+    arbiterData = JSON.parse(await readFile(arbiterDataPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    arbiterData = {};
+  }
+  const config = asObject(arbiterData.config);
+  arbiterData.config = {
+    ...config,
+    policy_version: bundle.policyRevisionId,
+    data_revision: bundle.dataRevisionId
+  };
+  arbiterData.control_plane_bundle = {
+    bundle_id: bundle.id,
+    digest: bundle.digest,
+    snapshot: bundle.snapshot
+  };
+  await addTarEntry(pack, "arbiter.json", Buffer.from(JSON.stringify(arbiterData, null, 2)));
+  await addTarEntry(pack, "snapshot.json", Buffer.from(JSON.stringify(bundle.snapshot, null, 2)));
+
+  pack.finalize();
+  const tarBuffer = await streamToBuffer(pack);
+  return gzip(tarBuffer);
+}
+
+export async function getBundleArchive(
+  bundleID: string
+): Promise<{ content: Buffer; fileName: string; digest: string } | null> {
+  const bundle = await getBundle(bundleID);
+  if (!bundle) {
+    return null;
+  }
+  const content = await buildBundleArchive(bundle);
+  return {
+    content,
+    fileName: `${bundle.id}.tar.gz`,
+    digest: bundle.digest
+  };
 }

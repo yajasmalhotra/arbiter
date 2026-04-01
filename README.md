@@ -250,6 +250,7 @@ docker run --rm -v $(pwd)/policy:/policy:ro openpolicyagent/opa:0.69.0 test /pol
 ## Control Plane UI
 
 Arbiter includes a Next.js application for policy data CRUD, audit review, and shadow simulation.
+By default it falls back to local file storage (`apps/control-plane/.data`). For production-like use, set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence and automatic SQL migrations from `apps/control-plane/db/migrations`.
 
 ```bash
 cd apps/control-plane
@@ -265,10 +266,19 @@ Open `http://localhost:3000` to view the dashboard.
 - `GET /api/bundles/active`
 - `GET /api/bundles/:id`
 - `POST /api/bundles/:id/activate`
+- `POST /api/bundles/:id/promote`
 - `GET /api/bundles/activations`
+- `GET /api/bundles/artifacts/:id`
+- `GET /api/bundles/channels/:channel/manifest`
+- `POST /api/bundles/channels/:channel/rollback`
 - `GET /api/revisions`
 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
+
+Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/manifest`) require `Authorization: Bearer <token>`. Configure a bootstrap token with:
+
+- `ARBITER_BUNDLE_SERVICE_TOKEN`
+- `ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES` (default `bundle:read`)
 
 ## Security Invariants
 

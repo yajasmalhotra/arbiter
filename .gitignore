@@ -3,9 +3,15 @@ bin/
 dist/
 coverage.out
 .env
+deploy/.env
 apps/control-plane/node_modules/
 apps/control-plane/.next/
 apps/control-plane/.data/
+apps/control-plane/.env
+apps/control-plane/.env.local
+apps/control-plane/.env.development.local
+apps/control-plane/.env.test.local
+apps/control-plane/.env.production.local
 examples/litellm-harness/.venv/
 .venv/
 __pycache__/

@@ -17,12 +17,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     body = {};
   }
 
-  const bundle = await promoteBundle(id, body.channel ?? "prod", {
-    actor: typeof body.actor === "string" ? body.actor : undefined,
-    notes: typeof body.notes === "string" ? body.notes : undefined
-  });
-  if (!bundle) {
-    return NextResponse.json({ error: "bundle not found" }, { status: 404 });
+  try {
+    const bundle = await promoteBundle(id, body.channel ?? "prod", {
+      actor: typeof body.actor === "string" ? body.actor : undefined,
+      notes: typeof body.notes === "string" ? body.notes : undefined
+    });
+    if (!bundle) {
+      return NextResponse.json({ error: "bundle not found" }, { status: 404 });
+    }
+    return NextResponse.json({ bundle });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "failed to promote bundle";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
-  return NextResponse.json({ bundle });
 }

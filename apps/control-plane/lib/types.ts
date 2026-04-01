@@ -56,10 +56,29 @@ export type BundleArtifact = {
 export type BundleActivation = {
   id: string;
   bundleId: string;
+  channel: "dev" | "staging" | "prod";
   state: "active" | "rolled_back";
   activatedBy: string;
   activatedAt: string;
   notes?: string;
+};
+
+export type BundleChannel = {
+  channel: "dev" | "staging" | "prod";
+  bundleId: string;
+  digest: string;
+  policyRevisionId: string;
+  dataRevisionId: string;
+};
+
+export type ServiceToken = {
+  id: string;
+  name: string;
+  scopes: string[];
+  createdBy: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
 };
 
 export type ControlPlaneData = {
