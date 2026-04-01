@@ -27,16 +27,15 @@ export default async function EditPolicyPage({ params }: { params: Promise<{ id:
         <Link href={`/policies/${encodeURIComponent(policy.id)}`}>← Back to policy</Link>
       </Button>
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Edit policy</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Edit rule</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Update metadata stored in the control plane. This screen is not linked from the sidebar—use the grid context
-          menu or the policy detail page.
+          Update governance metadata, rollout stage, and revision details for this rule.
         </p>
       </div>
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Policy fields</CardTitle>
-          <CardDescription>Same layout as Create Policy</CardDescription>
+          <CardTitle className="text-lg">Rule fields</CardTitle>
+          <CardDescription>Same layout as Create rule</CardDescription>
         </CardHeader>
         <CardContent>
           <PolicyRecordForm mode="edit" initialPolicy={policy} />

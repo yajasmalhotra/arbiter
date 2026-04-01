@@ -13,12 +13,17 @@ import {
   themeQuartz,
   type CellContextMenuEvent,
   type ColDef,
-  type ICellRendererParams
+  type ICellRendererParams,
+  type RowClickedEvent
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
 import { Pencil, Trash2 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { controlPlaneHeaders } from "@/lib/control-plane-client";
+import { formatTimestamp, rolloutLabel } from "@/lib/presentation";
 import { cn } from "@/lib/utils";
 import type { PolicyRecord } from "@/lib/types";
 
@@ -37,6 +42,7 @@ type ContextMenuState = {
 export function PoliciesGrid({ policies }: Props) {
   const router = useRouter();
   const { resolvedTheme } = useTheme();
+  const [quickFilter, setQuickFilter] = useState("");
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -49,7 +55,7 @@ export function PoliciesGrid({ policies }: Props) {
     () => [
       {
         field: "name",
-        headerName: "Name",
+        headerName: "Protection rule",
         flex: 1.2,
         minWidth: 160,
         cellRenderer: (params: ICellRendererParams<PolicyRecord>) => {
@@ -65,11 +71,54 @@ export function PoliciesGrid({ policies }: Props) {
           );
         }
       },
-      { field: "id", headerName: "ID", flex: 1, minWidth: 140 },
-      { field: "packageName", headerName: "Package", flex: 1, minWidth: 140 },
-      { field: "version", headerName: "Version", width: 100 },
-      { field: "rolloutState", headerName: "Rollout", width: 130 },
-      { field: "updatedAt", headerName: "Updated", width: 210, sort: "desc" }
+      {
+        field: "packageName",
+        headerName: "Policy package",
+        flex: 1,
+        minWidth: 140
+      },
+      { field: "version", headerName: "Revision", width: 100 },
+      {
+        field: "rolloutState",
+        headerName: "Status",
+        width: 170,
+        cellRenderer: (params: ICellRendererParams<PolicyRecord>) => {
+          const row = params.data;
+          if (!row) return null;
+          const label = rolloutLabel(row.rolloutState);
+          const tone =
+            row.rolloutState === "enforced"
+              ? "default"
+              : row.rolloutState === "rolled_back"
+                ? "destructive"
+                : "secondary";
+          return <Badge variant={tone}>{label}</Badge>;
+        }
+      },
+      {
+        field: "updatedAt",
+        headerName: "Last updated",
+        width: 220,
+        sort: "desc",
+        valueFormatter: (params) => formatTimestamp(String(params.value ?? ""))
+      },
+      {
+        headerName: "Actions",
+        width: 110,
+        sortable: false,
+        filter: false,
+        suppressHeaderMenuButton: true,
+        resizable: false,
+        cellRenderer: (params: ICellRendererParams<PolicyRecord>) => {
+          const row = params.data;
+          if (!row) return null;
+          return (
+            <Button size="sm" variant="ghost" asChild>
+              <Link href={`/policies/${encodeURIComponent(row.id)}/edit`}>Edit</Link>
+            </Button>
+          );
+        }
+      }
     ],
     []
   );
@@ -85,6 +134,15 @@ export function PoliciesGrid({ policies }: Props) {
   }, []);
 
   const closeMenu = useCallback(() => setMenu(null), []);
+
+  const onRowClicked = useCallback(
+    (event: RowClickedEvent<PolicyRecord>) => {
+      const policy = event.data;
+      if (!policy) return;
+      router.push(`/policies/${encodeURIComponent(policy.id)}`);
+    },
+    [router]
+  );
 
   const gridShellRef = useRef<HTMLDivElement>(null);
 
@@ -123,7 +181,10 @@ export function PoliciesGrid({ policies }: Props) {
     if (!window.confirm(`Delete policy "${policy.name}"? This cannot be undone.`)) {
       return;
     }
-    const res = await fetch(`/api/policies/${encodeURIComponent(policy.id)}`, { method: "DELETE" });
+    const res = await fetch(`/api/policies/${encodeURIComponent(policy.id)}`, {
+      method: "DELETE",
+      headers: controlPlaneHeaders()
+    });
     if (!res.ok) {
       alert("Delete failed");
       return;
@@ -149,6 +210,20 @@ export function PoliciesGrid({ policies }: Props) {
 
   return (
     <>
+      <div className="mb-4 grid gap-3 rounded-lg border bg-muted/20 p-4 md:grid-cols-[1fr_auto] md:items-end">
+        <div className="grid gap-1">
+          <p className="text-sm font-medium">Find a policy quickly</p>
+          <p className="text-xs text-muted-foreground">
+            Search by rule name, package, or status. Click a row to open details.
+          </p>
+        </div>
+        <Input
+          value={quickFilter}
+          onChange={(e) => setQuickFilter(e.target.value)}
+          placeholder="Search policies"
+          className="md:w-72"
+        />
+      </div>
       <div ref={gridShellRef} className="h-[520px] w-full" key={resolvedTheme ?? "dark"}>
         <AgGridReact<PolicyRecord>
           theme={gridTheme}
@@ -161,6 +236,8 @@ export function PoliciesGrid({ policies }: Props) {
             suppressHeaderMenuButton: false
           }}
           onCellContextMenu={onCellContextMenu}
+          onRowClicked={onRowClicked}
+          quickFilterText={quickFilter}
           animateRows
           pagination
           paginationPageSize={20}

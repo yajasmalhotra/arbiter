@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { ControlPlaneConnectionSettings } from "@/components/control-plane-connection-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { controlPlaneHeaders } from "@/lib/control-plane-client";
 import { cn } from "@/lib/utils";
 import { DEFAULT_OPENAI_INTERCEPT_JSON } from "@/lib/sample-intercept";
 import type { PolicyRecord } from "@/lib/types";
@@ -52,7 +54,10 @@ export function PolicyDetailClient({ policy }: Props) {
     try {
       const res = await fetch(`/api/policies/${encodeURIComponent(policy.id)}/test`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...controlPlaneHeaders()
+        },
         body: JSON.stringify({
           interceptPath,
           payload,
@@ -75,7 +80,8 @@ export function PolicyDetailClient({ policy }: Props) {
       return;
     }
     const res = await fetch(`/api/policies/${encodeURIComponent(policy.id)}`, {
-      method: "DELETE"
+      method: "DELETE",
+      headers: controlPlaneHeaders()
     });
     if (!res.ok) {
       alert("Delete failed");
@@ -96,7 +102,7 @@ export function PolicyDetailClient({ policy }: Props) {
       <Card>
         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle>Policy</CardTitle>
+            <CardTitle>Rule details</CardTitle>
             <CardDescription className="mt-2">
               <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{policy.id}</code>
               <span className="ml-3 text-muted-foreground">
@@ -131,7 +137,7 @@ export function PolicyDetailClient({ policy }: Props) {
             <span>{policy.rolloutState}</span>
           </div>
           <div className="grid gap-1">
-            <span className="text-muted-foreground">Rules (JSON)</span>
+            <span className="text-muted-foreground">Metadata (JSON)</span>
             <pre className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
               {rulesPretty}
             </pre>
@@ -146,7 +152,7 @@ export function PolicyDetailClient({ policy }: Props) {
             Sends a request to your running Arbiter interceptor (default{" "}
             <code className="rounded bg-muted px-1 text-xs">http://127.0.0.1:8080</code> unless{" "}
             <code className="rounded bg-muted px-1 text-xs">ARBITER_URL</code> is set, or use the override below).
-            Exercises live OPA on that instance.
+            This checks live policy behavior before rollout.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -194,6 +200,11 @@ export function PolicyDetailClient({ policy }: Props) {
           )}
         </CardContent>
       </Card>
+
+      <ControlPlaneConnectionSettings
+        title="Need authenticated actions?"
+        description="If edits or deletes are denied, set API key, tenant, and role headers here."
+      />
     </div>
   );
 }

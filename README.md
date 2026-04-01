@@ -305,6 +305,7 @@ npm install
 npm run dev
 ```
 Open `http://localhost:3000` to view the dashboard.
+Use `/operations` for guided bundle release, rollback, and key/token management workflows.
 
 ### Bundle Lifecycle APIs
 

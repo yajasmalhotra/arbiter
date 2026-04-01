@@ -15,16 +15,15 @@ export default function NewPolicyPage() {
         <Link href="/">← Dashboard</Link>
       </Button>
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Create Policy</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Create rule</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Registers metadata in the control plane store. Runtime Rego for Arbiter still lives under{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">policy/</code> unless you add sync.
+          Add a new governance rule record for rollout and operational tracking.
         </p>
       </div>
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Policy record</CardTitle>
-          <CardDescription>Identifiers, rollout state, and optional JSON rules metadata</CardDescription>
+          <CardTitle className="text-lg">Rule details</CardTitle>
+          <CardDescription>Name, rollout stage, and optional metadata</CardDescription>
         </CardHeader>
         <CardContent>
           <CreatePolicyForm />

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { validateServiceToken } from "./store";
+import {
+  CONTROL_PLANE_AUTH_HEADER,
+  CONTROL_PLANE_ROLE_HEADER,
+  CONTROL_PLANE_TENANT_HEADER
+} from "./control-plane-headers";
 
-export const CONTROL_PLANE_AUTH_HEADER = "X-Arbiter-Control-Key";
-export const CONTROL_PLANE_TENANT_HEADER = "X-Arbiter-Tenant-ID";
-export const CONTROL_PLANE_ROLE_HEADER = "X-Arbiter-Role";
+export { CONTROL_PLANE_AUTH_HEADER, CONTROL_PLANE_TENANT_HEADER, CONTROL_PLANE_ROLE_HEADER };
 
 export type ControlPlaneRole = "viewer" | "editor" | "approver" | "admin";
 
