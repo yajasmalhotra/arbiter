@@ -29,6 +29,11 @@ This Next.js application provides an initial governance control plane for Arbite
   - `GET /api/service-tokens`
   - `POST /api/service-tokens`
   - `POST /api/service-tokens/:id/revoke`
+- Signing key APIs:
+  - `GET /api/signing-keys`
+  - `POST /api/signing-keys`
+  - `POST /api/signing-keys/:id/activate`
+  - `POST /api/signing-keys/:id/revoke`
 - Revision APIs:
   - `GET /api/revisions`
 - Audit read API:
@@ -54,7 +59,8 @@ Set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence a
 If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Control-Key`.
 If `ARBITER_TENANT_ID` is set, mutating APIs also require `X-Arbiter-Tenant-ID` to match the configured tenant.
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
-Published bundle archives include `.signatures.json` and are signed with:
+Published bundle archives include `.signatures.json` and are signed by the active signing key.
+In Postgres mode, manage keys with the signing-key APIs; in fallback mode, signing uses:
 
 - `ARBITER_BUNDLE_SIGNING_KEY_ID`
 - `ARBITER_BUNDLE_SIGNING_SCOPE`

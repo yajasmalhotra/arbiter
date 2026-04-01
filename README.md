@@ -321,6 +321,10 @@ Open `http://localhost:3000` to view the dashboard.
 - `GET /api/service-tokens`
 - `POST /api/service-tokens`
 - `POST /api/service-tokens/:id/revoke`
+- `GET /api/signing-keys`
+- `POST /api/signing-keys`
+- `POST /api/signing-keys/:id/activate`
+- `POST /api/signing-keys/:id/revoke`
 - `GET /api/revisions`
 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
@@ -332,6 +336,9 @@ Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/m
 - `ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES` (default `bundle:read`)
 
 Signed bundle verification configuration:
+
+- In Postgres mode, use the signing-key APIs above to create, activate, and revoke signing keys with audit trails.
+- In fallback mode, signing uses environment bootstrap values:
 
 - `ARBITER_BUNDLE_SIGNING_KEY_ID` (default `arbiter_bundle_hs256`)
 - `ARBITER_BUNDLE_SIGNING_SCOPE` (default `read`)

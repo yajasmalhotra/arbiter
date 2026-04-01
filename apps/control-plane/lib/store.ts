@@ -18,6 +18,7 @@ import type {
   PolicyRecord,
   PolicyRevision,
   RolloutState,
+  SigningKey,
   ServiceToken
 } from "./types";
 
@@ -61,6 +62,21 @@ function serviceTokenFromRow(row: Record<string, unknown>): ServiceToken {
     createdBy: String(row.created_by),
     createdAt: toISOString(row.created_at),
     lastUsedAt: row.last_used_at ? toISOString(row.last_used_at) : undefined,
+    revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
+  };
+}
+
+function signingKeyFromRow(row: Record<string, unknown>): SigningKey {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    keyId: String(row.key_id),
+    scope: String(row.scope),
+    algorithm: "HS256",
+    isActive: Boolean(row.is_active),
+    createdBy: String(row.created_by),
+    createdAt: toISOString(row.created_at),
+    activatedAt: row.activated_at ? toISOString(row.activated_at) : undefined,
     revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
   };
 }
@@ -198,6 +214,85 @@ function bundleSigningConfig(): BundleSigningConfig {
     keyID: keyID || "arbiter_bundle_hs256",
     scope: scope || "read",
     secret,
+    algorithm: "HS256"
+  };
+}
+
+async function ensureBootstrapSigningKey(db: Pool): Promise<void> {
+  const bootstrap = bundleSigningConfig();
+  const now = new Date().toISOString();
+  await db.query(
+    `
+      INSERT INTO signing_keys (
+        id, tenant_id, name, key_id, scope, algorithm, secret, is_active, created_by, created_at, activated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9, $10)
+      ON CONFLICT (tenant_id, key_id) DO UPDATE
+      SET
+        name = EXCLUDED.name,
+        scope = EXCLUDED.scope,
+        algorithm = EXCLUDED.algorithm,
+        secret = EXCLUDED.secret,
+        is_active = TRUE,
+        revoked_at = NULL,
+        activated_at = COALESCE(signing_keys.activated_at, EXCLUDED.activated_at)
+    `,
+    [
+      "sk_bootstrap",
+      defaultTenantId(),
+      "bootstrap-bundle-signing-key",
+      bootstrap.keyID,
+      bootstrap.scope,
+      bootstrap.algorithm,
+      bootstrap.secret,
+      defaultActor(),
+      now,
+      now
+    ]
+  );
+  await db.query(
+    `
+      UPDATE signing_keys
+      SET is_active = FALSE
+      WHERE tenant_id = $1 AND id <> (
+        SELECT id
+        FROM signing_keys
+        WHERE tenant_id = $1 AND key_id = $2
+        LIMIT 1
+      ) AND is_active = TRUE
+    `,
+    [defaultTenantId(), bootstrap.keyID]
+  );
+}
+
+async function resolveBundleSigningConfig(): Promise<BundleSigningConfig> {
+  const fallback = bundleSigningConfig();
+  if (!dbEnabled()) {
+    return fallback;
+  }
+  await ensureMigrations();
+  const db = getPool();
+  if (!db) {
+    return fallback;
+  }
+  await ensureBootstrapSigningKey(db);
+  const result = await db.query(
+    `
+      SELECT key_id, scope, algorithm, secret
+      FROM signing_keys
+      WHERE tenant_id = $1 AND is_active = TRUE AND revoked_at IS NULL
+      LIMIT 1
+    `,
+    [defaultTenantId()]
+  );
+  if (!result.rowCount) {
+    return fallback;
+  }
+  const row = result.rows[0] as Record<string, unknown>;
+  return {
+    keyID: String(row.key_id),
+    scope: String(row.scope),
+    secret: String(row.secret),
     algorithm: "HS256"
   };
 }
@@ -402,6 +497,284 @@ export async function revokeServiceToken(id: string): Promise<ServiceToken | und
     },
     async () => {
       throw new Error("service token management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+type CreateSigningKeyInput = {
+  name: string;
+  secret: string;
+  keyId?: string;
+  scope?: string;
+  actor?: string;
+  activate?: boolean;
+};
+
+type SigningKeyMutationInput = {
+  actor?: string;
+};
+
+export async function listSigningKeys(): Promise<SigningKey[]> {
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapSigningKey(db);
+      const result = await db.query(
+        `
+          SELECT id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
+          FROM signing_keys
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => signingKeyFromRow(row as Record<string, unknown>));
+    },
+    async () => {
+      const signing = bundleSigningConfig();
+      const fallbackKey: SigningKey = {
+        id: "sk_env",
+        name: "env-bundle-signing-key",
+        keyId: signing.keyID,
+        scope: signing.scope,
+        algorithm: signing.algorithm,
+        isActive: true,
+        createdBy: "env",
+        createdAt: new Date(0).toISOString()
+      };
+      return [fallbackKey];
+    }
+  );
+}
+
+export async function createSigningKey(input: CreateSigningKeyInput): Promise<SigningKey> {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("signing key name is required");
+  }
+  const secret = input.secret.trim();
+  if (!secret) {
+    throw new Error("signing key secret is required");
+  }
+  const keyId = input.keyId?.trim() || `skid_${randomUUID()}`;
+  const scope = input.scope?.trim() || "read";
+  const activate = Boolean(input.activate);
+  const actor = input.actor?.trim() || defaultActor();
+
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapSigningKey(db);
+      const id = `sk_${randomUUID()}`;
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      let created: SigningKey | undefined;
+      try {
+        await client.query("BEGIN");
+        if (activate) {
+          await client.query(
+            `
+              UPDATE signing_keys
+              SET is_active = FALSE
+              WHERE tenant_id = $1 AND revoked_at IS NULL
+            `,
+            [defaultTenantId()]
+          );
+        }
+        const result = await client.query(
+          `
+            INSERT INTO signing_keys (
+              id, tenant_id, name, key_id, scope, algorithm, secret, is_active, created_by, created_at, activated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'HS256', $6, $7, $8, $9, $10)
+            RETURNING id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
+          `,
+          [id, defaultTenantId(), name, keyId, scope, secret, activate, actor, now, activate ? now : null]
+        );
+        created = signingKeyFromRow(result.rows[0] as Record<string, unknown>);
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (!created) {
+        throw new Error("failed to create signing key");
+      }
+      await appendAuditEvent({
+        action: activate ? "signing_key_created_and_activated" : "signing_key_created",
+        actor,
+        metadata: {
+          signingKeyId: created.id,
+          keyId: created.keyId,
+          scope: created.scope,
+          algorithm: created.algorithm
+        }
+      });
+      return created;
+    },
+    async () => {
+      throw new Error("signing key management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+export async function activateSigningKey(
+  id: string,
+  input: SigningKeyMutationInput = {}
+): Promise<SigningKey | undefined> {
+  const candidate = id.trim();
+  if (!candidate) {
+    throw new Error("signing key id is required");
+  }
+  const actor = input.actor?.trim() || defaultActor();
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapSigningKey(db);
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      let activated: SigningKey | undefined;
+      try {
+        await client.query("BEGIN");
+        const target = await client.query(
+          `
+            SELECT id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
+            FROM signing_keys
+            WHERE tenant_id = $1 AND id = $2
+            LIMIT 1
+          `,
+          [defaultTenantId(), candidate]
+        );
+        if (!target.rowCount) {
+          await client.query("COMMIT");
+          return undefined;
+        }
+        const targetRow = target.rows[0] as Record<string, unknown>;
+        if (targetRow.revoked_at) {
+          throw new Error("cannot activate a revoked signing key");
+        }
+
+        await client.query(
+          `
+            UPDATE signing_keys
+            SET is_active = FALSE
+            WHERE tenant_id = $1 AND revoked_at IS NULL
+          `,
+          [defaultTenantId()]
+        );
+        const result = await client.query(
+          `
+            UPDATE signing_keys
+            SET is_active = TRUE, activated_at = COALESCE(activated_at, $1)
+            WHERE tenant_id = $2 AND id = $3
+            RETURNING id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
+          `,
+          [now, defaultTenantId(), candidate]
+        );
+        activated = result.rowCount
+          ? signingKeyFromRow(result.rows[0] as Record<string, unknown>)
+          : undefined;
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (activated) {
+        await appendAuditEvent({
+          action: "signing_key_activated",
+          actor,
+          metadata: {
+            signingKeyId: activated.id,
+            keyId: activated.keyId
+          }
+        });
+      }
+      return activated;
+    },
+    async () => {
+      throw new Error("signing key management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+export async function revokeSigningKey(
+  id: string,
+  input: SigningKeyMutationInput = {}
+): Promise<SigningKey | undefined> {
+  const candidate = id.trim();
+  if (!candidate) {
+    throw new Error("signing key id is required");
+  }
+  const actor = input.actor?.trim() || defaultActor();
+  return withDbOrFallback(
+    async (db) => {
+      await ensureBootstrapSigningKey(db);
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      let revoked: SigningKey | undefined;
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `
+            UPDATE signing_keys
+            SET revoked_at = COALESCE(revoked_at, $1), is_active = FALSE
+            WHERE tenant_id = $2 AND id = $3
+            RETURNING id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
+          `,
+          [now, defaultTenantId(), candidate]
+        );
+        if (!result.rowCount) {
+          await client.query("COMMIT");
+          return undefined;
+        }
+        revoked = signingKeyFromRow(result.rows[0] as Record<string, unknown>);
+        const activeCount = await client.query(
+          `
+            SELECT id
+            FROM signing_keys
+            WHERE tenant_id = $1 AND revoked_at IS NULL AND is_active = TRUE
+            LIMIT 1
+          `,
+          [defaultTenantId()]
+        );
+        if (!activeCount.rowCount) {
+          await client.query(
+            `
+              UPDATE signing_keys
+              SET is_active = TRUE, activated_at = COALESCE(activated_at, $1)
+              WHERE id = (
+                SELECT id
+                FROM signing_keys
+                WHERE tenant_id = $2 AND revoked_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+              )
+            `,
+            [now, defaultTenantId()]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (revoked) {
+        await appendAuditEvent({
+          action: "signing_key_revoked",
+          actor,
+          metadata: {
+            signingKeyId: revoked.id,
+            keyId: revoked.keyId
+          }
+        });
+      }
+      return revoked;
+    },
+    async () => {
+      throw new Error("signing key management requires ARBITER_DB_URL");
     }
   );
 }
@@ -1148,7 +1521,7 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
   if (!CHANNELS.has(channel)) {
     throw new Error(`invalid channel: ${channel}`);
   }
-  const signing = bundleSigningConfig();
+  const signing = await resolveBundleSigningConfig();
 
   return withDbOrFallback(
     async (db) => {
@@ -1350,7 +1723,7 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   const pack = tar.pack();
   const createdAt = bundle.createdAt;
   const issuedAtUnix = Math.floor(new Date(createdAt).getTime() / 1000);
-  const signing = bundleSigningConfig();
+  const signing = await resolveBundleSigningConfig();
   const entries: BundleArchiveEntry[] = [];
   const queueEntry = (name: string, payload: Buffer): void => {
     entries.push({ name, payload });

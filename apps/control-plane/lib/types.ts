@@ -81,6 +81,19 @@ export type ServiceToken = {
   revokedAt?: string;
 };
 
+export type SigningKey = {
+  id: string;
+  name: string;
+  keyId: string;
+  scope: string;
+  algorithm: "HS256";
+  isActive: boolean;
+  createdBy: string;
+  createdAt: string;
+  activatedAt?: string;
+  revokedAt?: string;
+};
+
 export type ControlPlaneData = {
   policies: PolicyRecord[];
   auditEvents: AuditEvent[];
