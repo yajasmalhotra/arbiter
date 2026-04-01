@@ -177,6 +177,7 @@ When adding a new service or package:
 - [x] Add first-class Python integration packages under `integrations/` for LiteLLM and OpenClaw adoption paths.
 - [x] Add optional non-blocking Postgres audit sink fan-out for interceptor decision events.
 - [x] Add pilot soak traffic harness and runbook-backed validation workflow for readiness Steps 6 and 7.
+- [x] Add Python integration package distribution metadata (`pyproject`), changelog, and semver policy docs.
 - [x] Integrate a non-blocking shadow-mode intent labeler interface (`internal/intent/`) into canonical interception.
 - [ ] Promote the control-plane MVP beyond local file-backed storage into production policy and data distribution workflows.
 
@@ -188,7 +189,7 @@ The next code changes should usually start here:
 2. `apps/control-plane/` to finish policy/data distribution workflows (channel promotion semantics, artifact caching, and production key/service-token management).
 3. `apps/control-plane/` to add explicit signing-key rotation workflows and audit trails for bundle signature key changes.
 4. Pilot-environment execution: run `tools/pilot/soak_runner.py` in target infra and attach collected artifacts to readiness review.
-5. Package and publish integration SDKs (versioning, changelog, distribution metadata, and semver support policy).
+5. Publish integration SDK artifacts and automate release workflows (build/sign/upload + release notes).
 
 ## Production Pilot Sequence
 

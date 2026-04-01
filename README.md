@@ -217,10 +217,23 @@ First-class integration wrappers live under `integrations/`:
 - `integrations/python/arbiter_integrations/litellm.py` for OpenAI/LiteLLM tool-call interception and verification.
 - `integrations/python/arbiter_integrations/openclaw.py` for generic framework/OpenClaw interception and canonical verification.
 
+Install locally for development:
+
+```bash
+python3 -m pip install -e integrations/python
+```
+
 Run integration unit tests:
 
 ```bash
 python3 -m unittest discover integrations/python/tests -v
+```
+
+Build distributable artifacts:
+
+```bash
+python3 -m pip install build
+python3 -m build integrations/python
 ```
 
 ## Pilot Soak Validation

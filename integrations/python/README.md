@@ -7,6 +7,12 @@ This package provides drop-in client wrappers for:
 
 It wraps Arbiter intercept and verify APIs while handling shared-key headers.
 
+## Install (Local)
+
+```bash
+python3 -m pip install -e integrations/python
+```
+
 ## Layout
 
 - `arbiter_integrations/http_client.py`: HTTP transport + auth headers.
@@ -64,3 +70,15 @@ status, body = guard.intercept_action(
 ```bash
 python3 -m unittest discover integrations/python/tests -v
 ```
+
+## Build Distribution
+
+```bash
+python3 -m pip install build
+python3 -m build integrations/python
+```
+
+Release/versioning references:
+
+- `integrations/python/CHANGELOG.md`
+- `integrations/python/SEMVER.md`
