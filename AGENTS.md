@@ -18,6 +18,7 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
 - Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
 - Python integration wrappers, LiteLLM harnesses, and pilot soak tooling are present.
+- CI now gates Go tests, OPA policy tests, control-plane tests, and a Dockerized OPA bundle smoke run.
 - Remaining work is mostly production hardening: multi-tenant governance, live pilot execution, dashboard/alert validation, and release automation.
 
 ## Runtime Model
@@ -233,6 +234,7 @@ Control-plane storage behavior:
 
 - Postgres mode is the primary production path.
 - Local JSON fallback exists only for dev convenience.
+- `apps/control-plane/.data/control-plane.json` is generated local state and must remain gitignored and untracked.
 - The bundle signer uses the active DB-backed signing key when Postgres is enabled.
 - Environment signing values seed or bootstrap the signing path when DB state is unavailable.
 - The control-plane bundle builder reads directly from the mounted `policy/` tree, so Docker/Compose runs must provide `ARBITER_POLICY_ROOT=/policy` and mount that directory read-only.
@@ -317,6 +319,7 @@ Update these files when request/response shapes change.
 - Run `npm run build` in `apps/control-plane` after control-plane changes.
 - Run `python3 -m unittest discover integrations/python/tests -v` for Python packaging changes.
 - Run `python3 tools/pilot/soak_runner.py` for pilot readiness checks.
+- Run `./tools/ci/opa_bundle_smoke.sh` when Docker is available to validate control-plane bundle serving and OPA bundle activation.
 
 ## Open Work
 
