@@ -16,8 +16,9 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - Redis-backed prior-action context is in place for sequence-aware policies.
 - The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
+- Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
 - Python integration wrappers, LiteLLM harnesses, and pilot soak tooling are present.
-- Remaining work is mostly production hardening: multi-tenant governance, role-scoped approvals, live pilot execution, dashboard/alert validation, and release automation.
+- Remaining work is mostly production hardening: multi-tenant governance, live pilot execution, dashboard/alert validation, and release automation.
 
 ## Runtime Model
 
@@ -219,13 +220,14 @@ Control-plane routes:
 
 - Policy CRUD and rollout state live under `/api/policies` and `/api/rollouts`.
 - Bundle lifecycle lives under `/api/bundles`, `/api/bundles/active`, `/api/bundles/:id/activate`, `/api/bundles/:id/promote`, and channel rollback/artifact/manifest routes.
+- Approval workflow routes live under `/api/approvals`, `/api/approvals/:id/approve`, and `/api/approvals/:id/reject`.
 - `GET /api/bundles/channels/:channel/manifest` and `GET /api/bundles/channels/:channel/artifact` are the OPA-facing distribution endpoints.
 - `GET /api/revisions` and `GET /api/bundles/activations` expose version history.
 - `GET /api/audit` surfaces audit history.
 - `GET /api/service-tokens`, `POST /api/service-tokens`, and `POST /api/service-tokens/:id/revoke` manage bundle-fetch credentials.
 - `GET /api/signing-keys`, `POST /api/signing-keys`, `POST /api/signing-keys/:id/activate`, and `POST /api/signing-keys/:id/revoke` manage bundle-signing rotation.
 - Mutating routes require `CONTROL_PLANE_API_KEY` when configured, and `X-Arbiter-Tenant-ID` must match `ARBITER_TENANT_ID` when that fence is enabled.
-- With `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role`. `editor` covers policy/rollout/bundle draft operations, while `approver` is required for prod promotions/rollbacks, policy delete, and key/token lifecycle operations.
+- With `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role`. `editor` covers policy/rollout/bundle operations and creating prod approval requests, while `approver` is required to approve/reject prod requests plus policy delete and key/token lifecycle operations.
 
 Control-plane storage behavior:
 
@@ -318,7 +320,7 @@ Update these files when request/response shapes change.
 
 ## Open Work
 
-1. Finish production multi-tenant governance in the control plane, including role-scoped approvals and rollout controls.
+1. Finish production multi-tenant governance in the control plane, including tenant-scoped identities, approval ownership, and rollout controls.
 2. Run the live pilot soak in target infrastructure and collect artifacts.
 3. Validate dashboards, alerting, and OTLP traces against real traffic.
 4. Automate integration SDK releases and signing/upload workflows.

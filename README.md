@@ -305,7 +305,7 @@ npm install
 npm run dev
 ```
 Open `http://localhost:3000` to view the dashboard.
-Use `/operations` for guided bundle release, rollback, and key/token management workflows.
+Use `/operations` for guided bundle release requests, approval decisions, rollback workflows, and key/token management.
 
 ### Bundle Lifecycle APIs
 
@@ -320,6 +320,9 @@ Use `/operations` for guided bundle release, rollback, and key/token management 
 - `GET /api/bundles/channels/:channel/manifest`
 - `GET /api/bundles/channels/:channel/artifact`
 - `POST /api/bundles/channels/:channel/rollback`
+- `GET /api/approvals`
+- `POST /api/approvals/:id/approve`
+- `POST /api/approvals/:id/reject`
 - `GET /api/service-tokens`
 - `POST /api/service-tokens`
 - `POST /api/service-tokens/:id/revoke`
@@ -332,6 +335,12 @@ Use `/operations` for guided bundle release, rollback, and key/token management 
 Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
 When `ARBITER_TENANT_ID` is set, those same routes also require `X-Arbiter-Tenant-ID` to match the deployment tenant.
 When `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role` with sufficient privileges (`editor` or `approver` depending on operation).
+
+Production rollout behavior:
+
+- `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request (does not activate directly).
+- `POST /api/bundles/channels/prod/rollback` creates a pending approval request (does not rollback directly).
+- Only approvers can execute production actions via `/api/approvals/:id/approve` or reject via `/api/approvals/:id/reject`.
 
 Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/manifest`, `/api/bundles/channels/*/artifact`) require `Authorization: Bearer <token>`. Configure a bootstrap token with:
 

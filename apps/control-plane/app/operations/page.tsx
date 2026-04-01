@@ -3,19 +3,27 @@ import Link from "next/link";
 import { ControlPlaneConnectionSettings } from "@/components/control-plane-connection-settings";
 import { OperationsWorkbench } from "@/components/operations-workbench";
 import { Button } from "@/components/ui/button";
-import { getActiveBundle, listBundleActivations, listBundles, listServiceTokens, listSigningKeys } from "@/lib/store";
+import {
+  getActiveBundle,
+  listApprovalRequests,
+  listBundleActivations,
+  listBundles,
+  listServiceTokens,
+  listSigningKeys
+} from "@/lib/store";
 
 export const metadata = {
   title: "Operations · Arbiter Control Plane"
 };
 
 export default async function OperationsPage() {
-  const [activeBundle, bundles, activations, serviceTokens, signingKeys] = await Promise.all([
+  const [activeBundle, bundles, activations, serviceTokens, signingKeys, approvalRequests] = await Promise.all([
     getActiveBundle(),
     listBundles(),
     listBundleActivations(),
     listServiceTokens(),
-    listSigningKeys()
+    listSigningKeys(),
+    listApprovalRequests()
   ]);
 
   return (
@@ -42,8 +50,8 @@ export default async function OperationsPage() {
         activations={activations}
         serviceTokens={serviceTokens}
         signingKeys={signingKeys}
+        approvalRequests={approvalRequests}
       />
     </div>
   );
 }
-

@@ -4,13 +4,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
 
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import tar from "tar-stream";
 
 import { defaultActor, defaultTenantId } from "./context";
 import { dbEnabled, ensureMigrations, getPool } from "./db";
 import * as legacy from "./store_legacy";
 import type {
+  ApprovalAction,
+  ApprovalRequest,
+  ApprovalState,
   AuditEvent,
   BundleActivation,
   BundleArtifact,
@@ -78,6 +81,23 @@ function signingKeyFromRow(row: Record<string, unknown>): SigningKey {
     createdAt: toISOString(row.created_at),
     activatedAt: row.activated_at ? toISOString(row.activated_at) : undefined,
     revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
+  };
+}
+
+function approvalRequestFromRow(row: Record<string, unknown>): ApprovalRequest {
+  return {
+    id: String(row.id),
+    bundleId: String(row.bundle_id),
+    action: String(row.action) as ApprovalAction,
+    channel: String(row.channel) as BundleChannel,
+    state: String(row.state) as ApprovalState,
+    requestedBy: String(row.requested_by),
+    reviewedBy: row.reviewed_by ? String(row.reviewed_by) : undefined,
+    notes: row.notes ? String(row.notes) : undefined,
+    reviewNotes: row.review_notes ? String(row.review_notes) : undefined,
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at),
+    reviewedAt: row.reviewed_at ? toISOString(row.reviewed_at) : undefined
   };
 }
 
@@ -157,6 +177,19 @@ type ActivateBundleInput = {
 };
 
 type PromoteBundleInput = {
+  actor?: string;
+  notes?: string;
+};
+
+type CreateApprovalRequestInput = {
+  action: ApprovalAction;
+  bundleId?: string;
+  channel: BundleChannel;
+  actor?: string;
+  notes?: string;
+};
+
+type ReviewApprovalRequestInput = {
   actor?: string;
   notes?: string;
 };
@@ -1271,6 +1304,123 @@ export async function activateBundle(id: string, input: ActivateBundleInput = {}
   return promoteBundle(id, "prod", input);
 }
 
+async function currentChannelBundleID(
+  client: PoolClient,
+  tenant: string,
+  channel: BundleChannel
+): Promise<string | undefined> {
+  const channelResult = await client.query(
+    `
+      SELECT bundle_id
+      FROM bundle_channels
+      WHERE tenant_id = $1 AND channel = $2
+      LIMIT 1
+    `,
+    [tenant, channel]
+  );
+  if (channelResult.rowCount) {
+    return String((channelResult.rows[0] as Record<string, unknown>).bundle_id);
+  }
+
+  const fallback = await client.query(
+    `
+      SELECT id
+      FROM bundles
+      WHERE tenant_id = $1 AND status = 'active'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [tenant]
+  );
+  if (!fallback.rowCount) {
+    return undefined;
+  }
+  return String((fallback.rows[0] as Record<string, unknown>).id);
+}
+
+async function promoteBundleTx(
+  client: PoolClient,
+  tenant: string,
+  bundleID: string,
+  channel: BundleChannel,
+  actor: string,
+  notes?: string
+): Promise<BundleArtifact | undefined> {
+  const now = new Date().toISOString();
+  const targetResult = await client.query(
+    `
+      SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+      FROM bundles
+      WHERE tenant_id = $1 AND id = $2
+      LIMIT 1
+    `,
+    [tenant, bundleID]
+  );
+  if (!targetResult.rowCount) {
+    return undefined;
+  }
+
+  const currentBundleID = await currentChannelBundleID(client, tenant, channel);
+  if (currentBundleID && currentBundleID !== bundleID) {
+    await client.query(
+      "UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2 AND status = 'active'",
+      [tenant, currentBundleID]
+    );
+    await client.query(
+      `
+        INSERT INTO bundle_activations (
+          id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+        )
+        VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
+      `,
+      [randomUUID(), tenant, currentBundleID, channel, actor, now, `superseded by ${bundleID}`]
+    );
+  }
+
+  await client.query(
+    `
+      INSERT INTO bundle_channels (tenant_id, channel, bundle_id, updated_by, updated_at)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (tenant_id, channel)
+      DO UPDATE SET bundle_id = EXCLUDED.bundle_id, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at
+    `,
+    [tenant, channel, bundleID, actor, now]
+  );
+
+  await client.query(
+    `
+      UPDATE bundles
+      SET status = 'active',
+          rollout_state = CASE WHEN $3 = 'prod' AND rollout_state != 'rolled_back' THEN 'enforced' ELSE rollout_state END
+      WHERE tenant_id = $1 AND id = $2
+    `,
+    [tenant, bundleID, channel]
+  );
+
+  await client.query(
+    `
+      INSERT INTO bundle_activations (
+        id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+      )
+      VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
+    `,
+    [randomUUID(), tenant, bundleID, channel, actor, now, notes ?? null]
+  );
+
+  const promotedResult = await client.query(
+    `
+      SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+      FROM bundles
+      WHERE tenant_id = $1 AND id = $2
+      LIMIT 1
+    `,
+    [tenant, bundleID]
+  );
+  return promotedResult.rowCount
+    ? bundleFromRow(promotedResult.rows[0] as Record<string, unknown>)
+    : undefined;
+}
+
 export async function promoteBundle(
   bundleID: string,
   channel: BundleChannel,
@@ -1284,99 +1434,12 @@ export async function promoteBundle(
     async (db) => {
       const tenant = defaultTenantId();
       const actor = input.actor?.trim() || defaultActor();
-      const now = new Date().toISOString();
 
       const client = await db.connect();
       let promoted: BundleArtifact | undefined;
       try {
         await client.query("BEGIN");
-
-        const targetResult = await client.query(
-          `
-            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
-            FROM bundles
-            WHERE tenant_id = $1 AND id = $2
-            LIMIT 1
-          `,
-          [tenant, bundleID]
-        );
-        if (!targetResult.rowCount) {
-          await client.query("ROLLBACK");
-          return undefined;
-        }
-
-        const currentResult = await client.query(
-          `
-            SELECT bundle_id
-            FROM bundle_channels
-            WHERE tenant_id = $1 AND channel = $2
-            LIMIT 1
-          `,
-          [tenant, channel]
-        );
-
-        if (currentResult.rowCount) {
-          const currentBundleID = String((currentResult.rows[0] as Record<string, unknown>).bundle_id);
-          if (currentBundleID !== bundleID) {
-            await client.query(
-              "UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2 AND status = 'active'",
-              [tenant, currentBundleID]
-            );
-            await client.query(
-              `
-                INSERT INTO bundle_activations (
-                  id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
-                )
-                VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
-              `,
-              [randomUUID(), tenant, currentBundleID, channel, actor, now, `superseded by ${bundleID}`]
-            );
-          }
-        }
-
-        await client.query(
-          `
-            INSERT INTO bundle_channels (tenant_id, channel, bundle_id, updated_by, updated_at)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (tenant_id, channel)
-            DO UPDATE SET bundle_id = EXCLUDED.bundle_id, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at
-          `,
-          [tenant, channel, bundleID, actor, now]
-        );
-
-        await client.query(
-          `
-            UPDATE bundles
-            SET status = 'active',
-                rollout_state = CASE WHEN $3 = 'prod' AND rollout_state != 'rolled_back' THEN 'enforced' ELSE rollout_state END
-            WHERE tenant_id = $1 AND id = $2
-          `,
-          [tenant, bundleID, channel]
-        );
-
-        await client.query(
-          `
-            INSERT INTO bundle_activations (
-              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
-            )
-            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
-          `,
-          [randomUUID(), tenant, bundleID, channel, actor, now, input.notes ?? null]
-        );
-
-        const promotedResult = await client.query(
-          `
-            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
-            FROM bundles
-            WHERE tenant_id = $1 AND id = $2
-            LIMIT 1
-          `,
-          [tenant, bundleID]
-        );
-        promoted = promotedResult.rowCount
-          ? bundleFromRow(promotedResult.rows[0] as Record<string, unknown>)
-          : undefined;
-
+        promoted = await promoteBundleTx(client, tenant, bundleID, channel, actor, input.notes);
         await client.query("COMMIT");
       } catch (err) {
         await client.query("ROLLBACK");
@@ -1408,6 +1471,83 @@ export async function promoteBundle(
   );
 }
 
+async function rollbackChannelTx(
+  client: PoolClient,
+  tenant: string,
+  channel: BundleChannel,
+  actor: string,
+  notes?: string
+): Promise<BundleArtifact | undefined> {
+  const now = new Date().toISOString();
+  const currentBundleID = await currentChannelBundleID(client, tenant, channel);
+  if (!currentBundleID) {
+    return undefined;
+  }
+
+  const previousResult = await client.query(
+    `
+      SELECT bundle_id
+      FROM bundle_activations
+      WHERE tenant_id = $1 AND channel = $2 AND state = 'active' AND bundle_id != $3
+      ORDER BY activated_at DESC
+      LIMIT 1
+    `,
+    [tenant, channel, currentBundleID]
+  );
+  if (!previousResult.rowCount) {
+    return undefined;
+  }
+  const previousBundleID = String((previousResult.rows[0] as Record<string, unknown>).bundle_id);
+
+  await client.query(
+    `
+      UPDATE bundle_channels
+      SET bundle_id = $1, updated_by = $2, updated_at = $3
+      WHERE tenant_id = $4 AND channel = $5
+    `,
+    [previousBundleID, actor, now, tenant, channel]
+  );
+  await client.query("UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2", [
+    tenant,
+    currentBundleID
+  ]);
+  await client.query("UPDATE bundles SET status = 'active' WHERE tenant_id = $1 AND id = $2", [
+    tenant,
+    previousBundleID
+  ]);
+  await client.query(
+    `
+      INSERT INTO bundle_activations (
+        id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+      )
+      VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
+    `,
+    [randomUUID(), tenant, currentBundleID, channel, actor, now, notes ?? "manual rollback"]
+  );
+  await client.query(
+    `
+      INSERT INTO bundle_activations (
+        id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
+      )
+      VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
+    `,
+    [randomUUID(), tenant, previousBundleID, channel, actor, now, notes ?? "rollback restore"]
+  );
+
+  const restoredResult = await client.query(
+    `
+      SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
+      FROM bundles
+      WHERE tenant_id = $1 AND id = $2
+      LIMIT 1
+    `,
+    [tenant, previousBundleID]
+  );
+  return restoredResult.rowCount
+    ? bundleFromRow(restoredResult.rows[0] as Record<string, unknown>)
+    : undefined;
+}
+
 export async function rollbackChannel(
   channel: BundleChannel,
   input: PromoteBundleInput = {}
@@ -1420,92 +1560,12 @@ export async function rollbackChannel(
     async (db) => {
       const tenant = defaultTenantId();
       const actor = input.actor?.trim() || defaultActor();
-      const now = new Date().toISOString();
 
       const client = await db.connect();
       let restored: BundleArtifact | undefined;
       try {
         await client.query("BEGIN");
-
-        const currentResult = await client.query(
-          `
-            SELECT bundle_id
-            FROM bundle_channels
-            WHERE tenant_id = $1 AND channel = $2
-            LIMIT 1
-          `,
-          [tenant, channel]
-        );
-        if (!currentResult.rowCount) {
-          await client.query("ROLLBACK");
-          return undefined;
-        }
-        const currentBundleID = String((currentResult.rows[0] as Record<string, unknown>).bundle_id);
-
-        const previousResult = await client.query(
-          `
-            SELECT bundle_id
-            FROM bundle_activations
-            WHERE tenant_id = $1 AND channel = $2 AND state = 'active' AND bundle_id != $3
-            ORDER BY activated_at DESC
-            LIMIT 1
-          `,
-          [tenant, channel, currentBundleID]
-        );
-        if (!previousResult.rowCount) {
-          await client.query("ROLLBACK");
-          return undefined;
-        }
-        const previousBundleID = String((previousResult.rows[0] as Record<string, unknown>).bundle_id);
-
-        await client.query(
-          `
-            UPDATE bundle_channels
-            SET bundle_id = $1, updated_by = $2, updated_at = $3
-            WHERE tenant_id = $4 AND channel = $5
-          `,
-          [previousBundleID, actor, now, tenant, channel]
-        );
-        await client.query(
-          "UPDATE bundles SET status = 'rolled_back' WHERE tenant_id = $1 AND id = $2",
-          [tenant, currentBundleID]
-        );
-        await client.query("UPDATE bundles SET status = 'active' WHERE tenant_id = $1 AND id = $2", [
-          tenant,
-          previousBundleID
-        ]);
-        await client.query(
-          `
-            INSERT INTO bundle_activations (
-              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
-            )
-            VALUES ($1, $2, $3, $4, 'rolled_back', $5, $6, $7)
-          `,
-          [randomUUID(), tenant, currentBundleID, channel, actor, now, input.notes ?? "manual rollback"]
-        );
-        await client.query(
-          `
-            INSERT INTO bundle_activations (
-              id, tenant_id, bundle_id, channel, state, activated_by, activated_at, notes
-            )
-            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
-          `,
-          [randomUUID(), tenant, previousBundleID, channel, actor, now, input.notes ?? "rollback restore"]
-        );
-
-        const restoredResult = await client.query(
-          `
-            SELECT id, policy_revision_id, data_revision_id, rollout_state, digest, status, created_by, created_at, snapshot
-            FROM bundles
-            WHERE tenant_id = $1 AND id = $2
-            LIMIT 1
-          `,
-          [tenant, previousBundleID]
-        );
-        restored = restoredResult.rowCount
-          ? bundleFromRow(restoredResult.rows[0] as Record<string, unknown>)
-          : undefined;
-
+        restored = await rollbackChannelTx(client, tenant, channel, actor, input.notes);
         await client.query("COMMIT");
       } catch (err) {
         await client.query("ROLLBACK");
@@ -1528,7 +1588,309 @@ export async function rollbackChannel(
 
       return restored;
     },
-    async () => undefined
+    async () => legacy.rollbackChannel(channel, input)
+  );
+}
+
+export async function listApprovalRequests(state?: ApprovalState): Promise<ApprovalRequest[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const result = state
+        ? await db.query(
+            `
+              SELECT id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+              FROM approval_requests
+              WHERE tenant_id = $1 AND state = $2
+              ORDER BY created_at DESC
+            `,
+            [tenant, state]
+          )
+        : await db.query(
+            `
+              SELECT id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+              FROM approval_requests
+              WHERE tenant_id = $1
+              ORDER BY created_at DESC
+            `,
+            [tenant]
+          );
+      return result.rows.map((row) => approvalRequestFromRow(row as Record<string, unknown>));
+    },
+    async () => legacy.listApprovalRequests(state)
+  );
+}
+
+export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+  if (!CHANNELS.has(input.channel)) {
+    throw new Error(`invalid channel: ${input.channel}`);
+  }
+  if (input.channel !== "prod") {
+    throw new Error("approval workflow is only required for production");
+  }
+
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const actor = input.actor?.trim() || defaultActor();
+      const notes = input.notes?.trim() || undefined;
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      let created: ApprovalRequest | undefined;
+      try {
+        await client.query("BEGIN");
+
+        let bundleID = input.bundleId?.trim() || "";
+        if (input.action === "rollback_channel") {
+          const currentBundleID = await currentChannelBundleID(client, tenant, input.channel);
+          if (!currentBundleID) {
+            throw new Error(`no active bundle found for ${input.channel}`);
+          }
+          bundleID = currentBundleID;
+        }
+        if (!bundleID) {
+          throw new Error("bundle id is required");
+        }
+
+        const bundleCheck = await client.query(
+          "SELECT id FROM bundles WHERE tenant_id = $1 AND id = $2 LIMIT 1",
+          [tenant, bundleID]
+        );
+        if (!bundleCheck.rowCount) {
+          throw new Error("bundle not found");
+        }
+
+        const existing = await client.query(
+          `
+            SELECT id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+            FROM approval_requests
+            WHERE tenant_id = $1 AND bundle_id = $2 AND action = $3 AND channel = $4 AND state = 'pending'
+            LIMIT 1
+          `,
+          [tenant, bundleID, input.action, input.channel]
+        );
+        if (existing.rowCount) {
+          created = approvalRequestFromRow(existing.rows[0] as Record<string, unknown>);
+        } else {
+          const id = `ar_${randomUUID()}`;
+          const inserted = await client.query(
+            `
+              INSERT INTO approval_requests (
+                id, tenant_id, bundle_id, action, channel, state, requested_by, notes, created_at, updated_at
+              )
+              VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $8)
+              RETURNING id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+            `,
+            [id, tenant, bundleID, input.action, input.channel, actor, notes ?? null, now]
+          );
+          created = approvalRequestFromRow(inserted.rows[0] as Record<string, unknown>);
+        }
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (!created) {
+        throw new Error("failed to create approval request");
+      }
+
+      await appendAuditEvent({
+        action: "approval_requested",
+        actor,
+        metadata: {
+          approvalRequestId: created.id,
+          action: created.action,
+          channel: created.channel,
+          bundleId: created.bundleId,
+          notes: created.notes ?? ""
+        }
+      });
+      return created;
+    },
+    async () =>
+      legacy.createApprovalRequest({
+        action: input.action,
+        bundleId: input.bundleId,
+        channel: input.channel,
+        actor: input.actor,
+        notes: input.notes
+      })
+  );
+}
+
+export async function approveApprovalRequest(
+  id: string,
+  input: ReviewApprovalRequestInput = {}
+): Promise<{ approvalRequest: ApprovalRequest; bundle?: BundleArtifact } | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const actor = input.actor?.trim() || defaultActor();
+      const reviewNotes = input.notes?.trim() || undefined;
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      let approved: ApprovalRequest | undefined;
+      let promotedBundle: BundleArtifact | undefined;
+      let action: ApprovalAction | undefined;
+      let channel: BundleChannel | undefined;
+      try {
+        await client.query("BEGIN");
+        const current = await client.query(
+          `
+            SELECT id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+            FROM approval_requests
+            WHERE tenant_id = $1 AND id = $2
+            FOR UPDATE
+          `,
+          [tenant, id]
+        );
+        if (!current.rowCount) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+        const request = approvalRequestFromRow(current.rows[0] as Record<string, unknown>);
+        if (request.state !== "pending") {
+          throw new Error("approval request is not pending");
+        }
+
+        const actionNotes = reviewNotes ?? request.notes;
+        action = request.action;
+        channel = request.channel;
+        if (request.action === "promote_bundle") {
+          promotedBundle = await promoteBundleTx(
+            client,
+            tenant,
+            request.bundleId,
+            request.channel,
+            actor,
+            actionNotes
+          );
+          if (!promotedBundle) {
+            throw new Error("bundle not found");
+          }
+        } else {
+          promotedBundle = await rollbackChannelTx(client, tenant, request.channel, actor, actionNotes);
+          if (!promotedBundle) {
+            throw new Error(`no previous bundle found for channel ${request.channel}`);
+          }
+        }
+
+        const updated = await client.query(
+          `
+            UPDATE approval_requests
+            SET state = 'approved',
+                reviewed_by = $1,
+                reviewed_at = $2,
+                review_notes = $3,
+                updated_at = $2
+            WHERE tenant_id = $4 AND id = $5
+            RETURNING id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+          `,
+          [actor, now, reviewNotes ?? null, tenant, id]
+        );
+        approved = approvalRequestFromRow(updated.rows[0] as Record<string, unknown>);
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (!approved) {
+        return undefined;
+      }
+
+      if (action === "promote_bundle" && promotedBundle && channel) {
+        await appendAuditEvent({
+          action: "bundle_promoted",
+          actor,
+          metadata: {
+            channel,
+            bundleId: promotedBundle.id,
+            digest: promotedBundle.digest,
+            notes: reviewNotes ?? approved.notes ?? ""
+          }
+        });
+      } else if (action === "rollback_channel" && promotedBundle && channel) {
+        await appendAuditEvent({
+          action: "bundle_rolled_back",
+          actor,
+          metadata: {
+            channel,
+            restoredBundleId: promotedBundle.id,
+            notes: reviewNotes ?? approved.notes ?? ""
+          }
+        });
+      }
+
+      await appendAuditEvent({
+        action: "approval_approved",
+        actor,
+        metadata: {
+          approvalRequestId: approved.id,
+          action: approved.action,
+          channel: approved.channel,
+          bundleId: approved.bundleId,
+          notes: reviewNotes ?? ""
+        }
+      });
+
+      return {
+        approvalRequest: approved,
+        bundle: promotedBundle
+      };
+    },
+    async () => legacy.approveApprovalRequest(id, input)
+  );
+}
+
+export async function rejectApprovalRequest(
+  id: string,
+  input: ReviewApprovalRequestInput = {}
+): Promise<ApprovalRequest | undefined> {
+  return withDbOrFallback(
+    async (db) => {
+      const tenant = defaultTenantId();
+      const actor = input.actor?.trim() || defaultActor();
+      const reviewNotes = input.notes?.trim() || undefined;
+      const now = new Date().toISOString();
+      const result = await db.query(
+        `
+          UPDATE approval_requests
+          SET state = 'rejected',
+              reviewed_by = $1,
+              reviewed_at = $2,
+              review_notes = $3,
+              updated_at = $2
+          WHERE tenant_id = $4 AND id = $5 AND state = 'pending'
+          RETURNING id, bundle_id, action, channel, state, requested_by, reviewed_by, notes, review_notes, created_at, updated_at, reviewed_at
+        `,
+        [actor, now, reviewNotes ?? null, tenant, id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      const rejected = approvalRequestFromRow(result.rows[0] as Record<string, unknown>);
+      await appendAuditEvent({
+        action: "approval_rejected",
+        actor,
+        metadata: {
+          approvalRequestId: rejected.id,
+          action: rejected.action,
+          channel: rejected.channel,
+          bundleId: rejected.bundleId,
+          notes: reviewNotes ?? ""
+        }
+      });
+      return rejected;
+    },
+    async () => legacy.rejectApprovalRequest(id, input)
   );
 }
 

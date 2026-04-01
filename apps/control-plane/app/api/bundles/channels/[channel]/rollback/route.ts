@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireControlPlaneRole } from "../../../../../../lib/auth";
-import { rollbackChannel } from "../../../../../../lib/store";
+import { createApprovalRequest, rollbackChannel } from "../../../../../../lib/store";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ channel: string }> }
 ) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const { channel } = await params;
   if (channel !== "dev" && channel !== "staging" && channel !== "prod") {
     return NextResponse.json({ error: "invalid channel" }, { status: 400 });
@@ -23,7 +18,28 @@ export async function POST(
     body = {};
   }
 
+  const unauthorized = requireControlPlaneRole(request, "editor");
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   try {
+    if (channel === "prod") {
+      const approvalRequest = await createApprovalRequest({
+        action: "rollback_channel",
+        channel: "prod",
+        actor: typeof body.actor === "string" ? body.actor : undefined,
+        notes: typeof body.notes === "string" ? body.notes : undefined
+      });
+      return NextResponse.json(
+        {
+          status: "pending_approval",
+          approvalRequest
+        },
+        { status: 202 }
+      );
+    }
+
     const bundle = await rollbackChannel(channel, {
       actor: typeof body.actor === "string" ? body.actor : undefined,
       notes: typeof body.notes === "string" ? body.notes : undefined

@@ -1,5 +1,7 @@
 export type RolloutState = "draft" | "shadow" | "canary" | "enforced" | "rolled_back";
 export type BundleStatus = "draft" | "published" | "active" | "rolled_back";
+export type ApprovalAction = "promote_bundle" | "rollback_channel";
+export type ApprovalState = "pending" | "approved" | "rejected";
 
 export type PolicyRecord = {
   id: string;
@@ -71,6 +73,21 @@ export type BundleChannel = {
   dataRevisionId: string;
 };
 
+export type ApprovalRequest = {
+  id: string;
+  bundleId: string;
+  action: ApprovalAction;
+  channel: "dev" | "staging" | "prod";
+  state: ApprovalState;
+  requestedBy: string;
+  reviewedBy?: string;
+  notes?: string;
+  reviewNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt?: string;
+};
+
 export type ServiceToken = {
   id: string;
   name: string;
@@ -101,4 +118,5 @@ export type ControlPlaneData = {
   dataRevisions: DataRevision[];
   bundles: BundleArtifact[];
   bundleActivations: BundleActivation[];
+  approvalRequests: ApprovalRequest[];
 };

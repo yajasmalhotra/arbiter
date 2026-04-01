@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,15 +9,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { controlPlaneHeaders } from "@/lib/control-plane-client";
+import { controlPlaneHeaders, loadControlPlaneClientConfig } from "@/lib/control-plane-client";
 import { bundleStatusLabel, formatTimestamp, rolloutLabel, shortID } from "@/lib/presentation";
 import { cn } from "@/lib/utils";
-import type { BundleActivation, BundleArtifact, ServiceToken, SigningKey } from "@/lib/types";
+import type { ApprovalRequest, BundleActivation, BundleArtifact, ServiceToken, SigningKey } from "@/lib/types";
 
 const selectClass = cn(
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 );
+
+type Role = "viewer" | "editor" | "approver" | "admin";
+
+const ROLE_WEIGHT: Record<Role, number> = {
+  viewer: 10,
+  editor: 20,
+  approver: 30,
+  admin: 40
+};
 
 type Props = {
   bundles: BundleArtifact[];
@@ -25,6 +34,7 @@ type Props = {
   activeBundle?: BundleArtifact;
   serviceTokens: ServiceToken[];
   signingKeys: SigningKey[];
+  approvalRequests: ApprovalRequest[];
 };
 
 type StatusMessage = {
@@ -32,11 +42,29 @@ type StatusMessage = {
   text: string;
 };
 
+function normalizeRole(raw: string): Role | undefined {
+  const role = raw.trim().toLowerCase();
+  if (role === "viewer" || role === "editor" || role === "approver" || role === "admin") {
+    return role;
+  }
+  return undefined;
+}
+
+function hasMinimumRole(role: Role | undefined, minimum: Role): boolean {
+  if (!role) {
+    return true;
+  }
+  return ROLE_WEIGHT[role] >= ROLE_WEIGHT[minimum];
+}
+
 export function OperationsWorkbench(props: Props) {
   const router = useRouter();
   const [serviceTokens, setServiceTokens] = useState(props.serviceTokens);
   const [signingKeys, setSigningKeys] = useState(props.signingKeys);
+  const [approvalRequests, setApprovalRequests] = useState(props.approvalRequests);
+  const [reviewNotesById, setReviewNotesById] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusMessage | null>(null);
+  const [currentRole, setCurrentRole] = useState<Role | undefined>();
 
   const [promoteBundleId, setPromoteBundleId] = useState(props.bundles[0]?.id ?? "");
   const [promoteChannel, setPromoteChannel] = useState<"dev" | "staging" | "prod">("prod");
@@ -57,6 +85,24 @@ export function OperationsWorkbench(props: Props) {
 
   const [pending, setPending] = useState<string | null>(null);
 
+  const canEdit = hasMinimumRole(currentRole, "editor");
+  const canApprove = hasMinimumRole(currentRole, "approver");
+  const pendingApprovals = approvalRequests.filter((request) => request.state === "pending");
+
+  useEffect(() => {
+    const load = () => {
+      const config = loadControlPlaneClientConfig();
+      setCurrentRole(normalizeRole(config.role));
+    };
+    load();
+    window.addEventListener("storage", load);
+    window.addEventListener("arbiter-control-plane-client-config-updated", load);
+    return () => {
+      window.removeEventListener("storage", load);
+      window.removeEventListener("arbiter-control-plane-client-config-updated", load);
+    };
+  }, []);
+
   function requestHeaders(json = true): Record<string, string> {
     return {
       ...(json ? { "Content-Type": "application/json" } : {}),
@@ -72,9 +118,17 @@ export function OperationsWorkbench(props: Props) {
     }
   }
 
+  function upsertApprovalRequest(request: ApprovalRequest) {
+    setApprovalRequests((current) => [request, ...current.filter((item) => item.id !== request.id)]);
+  }
+
   async function handlePromote(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
+    if (!canEdit) {
+      setStatus({ kind: "error", text: "Promotion requests require editor role or higher." });
+      return;
+    }
     if (!promoteBundleId.trim()) {
       setStatus({ kind: "error", text: "Select a bundle to promote." });
       return;
@@ -94,9 +148,15 @@ export function OperationsWorkbench(props: Props) {
         setStatus({ kind: "error", text: String(body.error ?? `Promote failed (${res.status})`) });
         return;
       }
-      setStatus({ kind: "success", text: "Bundle promotion submitted." });
+
+      if (res.status === 202 && body.approvalRequest) {
+        upsertApprovalRequest(body.approvalRequest as ApprovalRequest);
+        setStatus({ kind: "success", text: "Production promotion submitted for approval." });
+      } else {
+        setStatus({ kind: "success", text: "Bundle promotion completed." });
+        router.refresh();
+      }
       setPromoteNotes("");
-      router.refresh();
     } finally {
       setPending(null);
     }
@@ -105,6 +165,10 @@ export function OperationsWorkbench(props: Props) {
   async function handleRollback(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
+    if (!canEdit) {
+      setStatus({ kind: "error", text: "Rollback requests require editor role or higher." });
+      return;
+    }
     setPending("rollback");
     try {
       const res = await fetch(`/api/bundles/channels/${rollbackChannel}/rollback`, {
@@ -119,9 +183,76 @@ export function OperationsWorkbench(props: Props) {
         setStatus({ kind: "error", text: String(body.error ?? `Rollback failed (${res.status})`) });
         return;
       }
-      setStatus({ kind: "success", text: `Rollback completed for ${rollbackChannel}.` });
+
+      if (res.status === 202 && body.approvalRequest) {
+        upsertApprovalRequest(body.approvalRequest as ApprovalRequest);
+        setStatus({ kind: "success", text: "Production rollback submitted for approval." });
+      } else {
+        setStatus({ kind: "success", text: `Rollback completed for ${rollbackChannel}.` });
+        router.refresh();
+      }
       setRollbackNotes("");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleApproveRequest(id: string) {
+    setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Approving requests requires approver role or higher." });
+      return;
+    }
+    setPending(`approve:${id}`);
+    try {
+      const notes = reviewNotesById[id]?.trim() || undefined;
+      const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/approve`, {
+        method: "POST",
+        headers: requestHeaders(),
+        body: JSON.stringify({ notes })
+      });
+      const body = await parseBody(res);
+      if (!res.ok) {
+        setStatus({ kind: "error", text: String(body.error ?? `Approve failed (${res.status})`) });
+        return;
+      }
+      const approvalRequest = (body.approvalRequest ?? null) as ApprovalRequest | null;
+      if (approvalRequest) {
+        upsertApprovalRequest(approvalRequest);
+      }
+      setStatus({ kind: "success", text: "Approval request approved and action executed." });
+      setReviewNotesById((current) => ({ ...current, [id]: "" }));
       router.refresh();
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleRejectRequest(id: string) {
+    setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Rejecting requests requires approver role or higher." });
+      return;
+    }
+    setPending(`reject:${id}`);
+    try {
+      const notes = reviewNotesById[id]?.trim() || undefined;
+      const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/reject`, {
+        method: "POST",
+        headers: requestHeaders(),
+        body: JSON.stringify({ notes })
+      });
+      const body = await parseBody(res);
+      if (!res.ok) {
+        setStatus({ kind: "error", text: String(body.error ?? `Reject failed (${res.status})`) });
+        return;
+      }
+      const approvalRequest = (body.approvalRequest ?? null) as ApprovalRequest | null;
+      if (approvalRequest) {
+        upsertApprovalRequest(approvalRequest);
+      }
+      setStatus({ kind: "success", text: "Approval request rejected." });
+      setReviewNotesById((current) => ({ ...current, [id]: "" }));
     } finally {
       setPending(null);
     }
@@ -130,6 +261,10 @@ export function OperationsWorkbench(props: Props) {
   async function handleCreateServiceToken(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Token management requires approver role or higher." });
+      return;
+    }
     if (!serviceTokenName.trim()) {
       setStatus({ kind: "error", text: "Token name is required." });
       return;
@@ -169,6 +304,10 @@ export function OperationsWorkbench(props: Props) {
 
   async function handleRevokeServiceToken(id: string) {
     setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Token management requires approver role or higher." });
+      return;
+    }
     setPending(`revoke-token:${id}`);
     try {
       const res = await fetch(`/api/service-tokens/${encodeURIComponent(id)}/revoke`, {
@@ -193,6 +332,10 @@ export function OperationsWorkbench(props: Props) {
   async function handleCreateSigningKey(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Signing key management requires approver role or higher." });
+      return;
+    }
     if (!keyName.trim() || !keySecret.trim()) {
       setStatus({ kind: "error", text: "Signing key name and secret are required." });
       return;
@@ -231,6 +374,10 @@ export function OperationsWorkbench(props: Props) {
 
   async function handleActivateSigningKey(id: string) {
     setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Signing key management requires approver role or higher." });
+      return;
+    }
     setPending(`activate-key:${id}`);
     try {
       const res = await fetch(`/api/signing-keys/${encodeURIComponent(id)}/activate`, {
@@ -259,6 +406,10 @@ export function OperationsWorkbench(props: Props) {
 
   async function handleRevokeSigningKey(id: string) {
     setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Signing key management requires approver role or higher." });
+      return;
+    }
     setPending(`revoke-key:${id}`);
     try {
       const res = await fetch(`/api/signing-keys/${encodeURIComponent(id)}/revoke`, {
@@ -293,6 +444,12 @@ export function OperationsWorkbench(props: Props) {
           )}
         >
           {status.text}
+        </div>
+      )}
+
+      {currentRole && (
+        <div className="rounded-md border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+          Current connection role: <span className="font-medium text-foreground">{currentRole}</span>
         </div>
       )}
 
@@ -343,7 +500,7 @@ export function OperationsWorkbench(props: Props) {
                 >
                   <option value="dev">Development</option>
                   <option value="staging">Staging</option>
-                  <option value="prod">Production</option>
+                  <option value="prod">Production (approval required)</option>
                 </select>
               </div>
               <div className="grid gap-2">
@@ -355,8 +512,18 @@ export function OperationsWorkbench(props: Props) {
                   placeholder="Why this promotion is safe"
                 />
               </div>
-              <Button type="submit" disabled={pending === "promote"}>
-                {pending === "promote" ? "Promoting..." : "Promote bundle"}
+              {promoteChannel === "prod" && (
+                <p className="text-xs text-muted-foreground">
+                  Production changes create a pending approval request before rollout.
+                </p>
+              )}
+              {!canEdit && <p className="text-xs text-destructive">Requires editor role or higher.</p>}
+              <Button type="submit" disabled={pending === "promote" || !canEdit}>
+                {pending === "promote"
+                  ? "Submitting..."
+                  : promoteChannel === "prod"
+                    ? "Request production promotion"
+                    : "Promote bundle"}
               </Button>
             </form>
 
@@ -372,7 +539,7 @@ export function OperationsWorkbench(props: Props) {
                 >
                   <option value="dev">Development</option>
                   <option value="staging">Staging</option>
-                  <option value="prod">Production</option>
+                  <option value="prod">Production (approval required)</option>
                 </select>
               </div>
               <div className="grid gap-2">
@@ -384,8 +551,13 @@ export function OperationsWorkbench(props: Props) {
                   placeholder="What issue triggered rollback"
                 />
               </div>
-              <Button type="submit" variant="destructive" disabled={pending === "rollback"}>
-                {pending === "rollback" ? "Rolling back..." : "Rollback channel"}
+              {!canEdit && <p className="text-xs text-destructive">Requires editor role or higher.</p>}
+              <Button type="submit" variant="destructive" disabled={pending === "rollback" || !canEdit}>
+                {pending === "rollback"
+                  ? "Submitting..."
+                  : rollbackChannel === "prod"
+                    ? "Request production rollback"
+                    : "Rollback channel"}
               </Button>
             </form>
           </div>
@@ -431,11 +603,94 @@ export function OperationsWorkbench(props: Props) {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-lg">Approvals queue</CardTitle>
+          <CardDescription>Approvers review and finalize pending production rollout requests.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {!canApprove && (
+            <p className="text-sm text-muted-foreground">
+              Pending requests are visible, but approving or rejecting requires approver role or higher.
+            </p>
+          )}
+          <div className="max-h-[360px] overflow-auto rounded-md border">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">State</th>
+                  <th className="px-3 py-2">Action</th>
+                  <th className="px-3 py-2">Bundle</th>
+                  <th className="px-3 py-2">Requested</th>
+                  <th className="px-3 py-2">Review</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingApprovals.map((request) => (
+                  <tr key={request.id} className="border-t align-top">
+                    <td className="px-3 py-2">
+                      <Badge variant={request.state === "pending" ? "secondary" : "outline"}>{request.state}</Badge>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="text-xs text-muted-foreground">{request.channel}</div>
+                      <div>{request.action === "promote_bundle" ? "Promote bundle" : "Rollback channel"}</div>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">{shortID(request.bundleId, 14)}</td>
+                    <td className="px-3 py-2">
+                      <div>{request.requestedBy}</div>
+                      <div className="text-xs text-muted-foreground">{formatTimestamp(request.createdAt)}</div>
+                    </td>
+                    <td className="space-y-2 px-3 py-2">
+                      <Input
+                        value={reviewNotesById[request.id] ?? ""}
+                        onChange={(e) =>
+                          setReviewNotesById((current) => ({ ...current, [request.id]: e.target.value }))
+                        }
+                        placeholder="Review note (optional)"
+                        disabled={!canApprove}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          disabled={!canApprove || pending === `approve:${request.id}`}
+                          onClick={() => void handleApproveRequest(request.id)}
+                        >
+                          {pending === `approve:${request.id}` ? "Approving..." : "Approve"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!canApprove || pending === `reject:${request.id}`}
+                          onClick={() => void handleRejectRequest(request.id)}
+                        >
+                          {pending === `reject:${request.id}` ? "Rejecting..." : "Reject"}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {pendingApprovals.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-4 text-muted-foreground" colSpan={5}>
+                      No pending approval requests.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-lg">Integration access tokens</CardTitle>
           <CardDescription>Create and revoke tokens used by bundle consumers such as OPA.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <form className="grid gap-3 rounded-md border p-4 md:grid-cols-[1fr_1fr_auto] md:items-end" onSubmit={(e) => void handleCreateServiceToken(e)}>
+          {!canApprove && <p className="text-sm text-muted-foreground">Requires approver role or higher.</p>}
+          <form
+            className="grid gap-3 rounded-md border p-4 md:grid-cols-[1fr_1fr_auto] md:items-end"
+            onSubmit={(e) => void handleCreateServiceToken(e)}
+          >
             <div className="grid gap-2">
               <Label htmlFor="token-name">Token name</Label>
               <Input
@@ -443,6 +698,7 @@ export function OperationsWorkbench(props: Props) {
                 value={serviceTokenName}
                 onChange={(e) => setServiceTokenName(e.target.value)}
                 placeholder="opa-prod-reader"
+                disabled={!canApprove}
               />
             </div>
             <div className="grid gap-2">
@@ -452,9 +708,10 @@ export function OperationsWorkbench(props: Props) {
                 value={serviceTokenScopes}
                 onChange={(e) => setServiceTokenScopes(e.target.value)}
                 placeholder="bundle:read"
+                disabled={!canApprove}
               />
             </div>
-            <Button type="submit" disabled={pending === "create-token"}>
+            <Button type="submit" disabled={pending === "create-token" || !canApprove}>
               {pending === "create-token" ? "Creating..." : "Create token"}
             </Button>
           </form>
@@ -492,7 +749,7 @@ export function OperationsWorkbench(props: Props) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={Boolean(token.revokedAt) || pending === `revoke-token:${token.id}`}
+                        disabled={!canApprove || Boolean(token.revokedAt) || pending === `revoke-token:${token.id}`}
                         onClick={() => void handleRevokeServiceToken(token.id)}
                       >
                         Revoke
@@ -519,14 +776,20 @@ export function OperationsWorkbench(props: Props) {
           <CardDescription>Create, activate, and revoke keys used for signed bundle distribution.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {!canApprove && <p className="text-sm text-muted-foreground">Requires approver role or higher.</p>}
           <form className="grid gap-3 rounded-md border p-4 md:grid-cols-2" onSubmit={(e) => void handleCreateSigningKey(e)}>
             <div className="grid gap-2">
               <Label htmlFor="key-name">Key name</Label>
-              <Input id="key-name" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
+              <Input
+                id="key-name"
+                value={keyName}
+                onChange={(e) => setKeyName(e.target.value)}
+                disabled={!canApprove}
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="key-id">Key ID (optional)</Label>
-              <Input id="key-id" value={keyId} onChange={(e) => setKeyId(e.target.value)} />
+              <Input id="key-id" value={keyId} onChange={(e) => setKeyId(e.target.value)} disabled={!canApprove} />
             </div>
             <div className="grid gap-2 md:col-span-2">
               <Label htmlFor="key-secret">Secret</Label>
@@ -536,11 +799,17 @@ export function OperationsWorkbench(props: Props) {
                 value={keySecret}
                 onChange={(e) => setKeySecret(e.target.value)}
                 placeholder="Paste shared signing secret"
+                disabled={!canApprove}
               />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="key-scope">Scope</Label>
-              <Input id="key-scope" value={keyScope} onChange={(e) => setKeyScope(e.target.value)} />
+              <Input
+                id="key-scope"
+                value={keyScope}
+                onChange={(e) => setKeyScope(e.target.value)}
+                disabled={!canApprove}
+              />
             </div>
             <div className="flex items-center gap-2 self-end">
               <input
@@ -548,11 +817,12 @@ export function OperationsWorkbench(props: Props) {
                 type="checkbox"
                 checked={activateKeyNow}
                 onChange={(e) => setActivateKeyNow(e.target.checked)}
+                disabled={!canApprove}
               />
               <Label htmlFor="key-activate">Activate immediately</Label>
             </div>
             <div className="md:col-span-2">
-              <Button type="submit" disabled={pending === "create-key"}>
+              <Button type="submit" disabled={pending === "create-key" || !canApprove}>
                 {pending === "create-key" ? "Creating..." : "Create signing key"}
               </Button>
             </div>
@@ -589,7 +859,12 @@ export function OperationsWorkbench(props: Props) {
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={Boolean(key.revokedAt) || key.isActive || pending === `activate-key:${key.id}`}
+                          disabled={
+                            !canApprove ||
+                            Boolean(key.revokedAt) ||
+                            key.isActive ||
+                            pending === `activate-key:${key.id}`
+                          }
                           onClick={() => void handleActivateSigningKey(key.id)}
                         >
                           Activate
@@ -597,7 +872,7 @@ export function OperationsWorkbench(props: Props) {
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={Boolean(key.revokedAt) || pending === `revoke-key:${key.id}`}
+                          disabled={!canApprove || Boolean(key.revokedAt) || pending === `revoke-key:${key.id}`}
                           onClick={() => void handleRevokeSigningKey(key.id)}
                         >
                           Revoke
@@ -621,4 +896,3 @@ export function OperationsWorkbench(props: Props) {
     </div>
   );
 }
-

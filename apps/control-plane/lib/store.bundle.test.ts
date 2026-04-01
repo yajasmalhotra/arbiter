@@ -4,9 +4,34 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import tar from "tar-stream";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { getChannelArchive } from "./store";
+const MOCK_BUNDLE = {
+  id: "bundle_test_prod",
+  policyRevisionId: "pr_test_bundle",
+  dataRevisionId: "dr_test_bundle",
+  rolloutState: "enforced",
+  digest: "digest_test_bundle",
+  status: "active",
+  createdBy: "test",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  snapshot: {
+    policies: [],
+    data: {}
+  }
+} as const;
+
+vi.mock("./store_legacy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./store_legacy")>();
+  return {
+    ...actual,
+    getBundle: vi.fn(async () => MOCK_BUNDLE),
+    getActiveBundle: vi.fn(async () => MOCK_BUNDLE),
+    publishBundle: vi.fn(async () => MOCK_BUNDLE),
+    activateBundle: vi.fn(async () => MOCK_BUNDLE),
+    rollbackChannel: vi.fn(async () => MOCK_BUNDLE)
+  };
+});
 
 function sha256Hex(input: Buffer | string): string {
   return createHash("sha256").update(input).digest("hex");
@@ -100,6 +125,7 @@ describe("bundle archive regression coverage", () => {
     process.env.ARBITER_BUNDLE_SIGNING_KEY_ID = "bundle_test_hs256";
     process.env.ARBITER_BUNDLE_SIGNING_SCOPE = "read";
 
+    const { getChannelArchive } = await import("./store");
     const archive = await getChannelArchive("prod");
     if (!archive) {
       throw new Error("expected prod archive");

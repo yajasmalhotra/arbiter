@@ -25,6 +25,10 @@ This Next.js application provides an initial governance control plane for Arbite
   - `GET /api/bundles/channels/:channel/manifest`
   - `GET /api/bundles/channels/:channel/artifact`
   - `POST /api/bundles/channels/:channel/rollback`
+- Approval APIs:
+  - `GET /api/approvals`
+  - `POST /api/approvals/:id/approve`
+  - `POST /api/approvals/:id/reject`
 - Service token APIs:
   - `GET /api/service-tokens`
   - `POST /api/service-tokens`
@@ -44,7 +48,7 @@ This Next.js application provides an initial governance control plane for Arbite
 - Dashboard now includes guided workflow cards and client-side connection settings for secured control-plane headers.
 - Policy detail at `/policies/:id`: view/edit fields and **Test against Arbiter** (edit JSON body, pick intercept route, run).
 - **Create Policy** at `/policies/new` (sidebar + empty grid CTA). Sidebar: **Dashboard**, **Create Policy**.
-- Operations workspace at `/operations` for bundle promotions/rollbacks, service token lifecycle, and signing-key lifecycle.
+- Operations workspace at `/operations` for bundle release requests, approval queue actions, rollbacks, service token lifecycle, and signing-key lifecycle.
 - UI uses **shadcn/ui** (Tailwind CSS, Radix primitives) and **AG Grid** for the policy table.
 
 ## Local Run
@@ -63,8 +67,14 @@ If `CONTROL_PLANE_API_KEY` is set, mutating APIs require header `X-Arbiter-Contr
 If `ARBITER_TENANT_ID` is set, mutating APIs also require `X-Arbiter-Tenant-ID` to match the configured tenant.
 If `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, role-scoped mutation checks are enabled via `X-Arbiter-Role`:
 
-- `editor` can publish bundles, update policies, and change rollout state.
-- `approver` is required for policy delete, prod promotion/rollback, service-token operations, and signing-key operations.
+- `editor` can publish bundles, update policies, change rollout state, and create prod approval requests.
+- `approver` is required to approve/reject prod rollout requests, plus policy delete, service-token operations, and signing-key operations.
+
+Production channel safeguards:
+
+- `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.
+- `POST /api/bundles/channels/prod/rollback` creates a pending approval request.
+- Direct prod activation/rollback is blocked until an approver executes `/api/approvals/:id/approve`.
 
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
 Published bundle archives include `.signatures.json` and are signed by the active signing key.

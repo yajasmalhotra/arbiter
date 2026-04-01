@@ -20,6 +20,8 @@ const EMPTY_CONFIG: ControlPlaneClientConfig = {
   role: ""
 };
 
+const UPDATE_EVENT = "arbiter-control-plane-client-config-updated";
+
 export function loadControlPlaneClientConfig(): ControlPlaneClientConfig {
   if (typeof window === "undefined") {
     return EMPTY_CONFIG;
@@ -50,6 +52,7 @@ export function saveControlPlaneClientConfig(
   };
   if (typeof window !== "undefined") {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    window.dispatchEvent(new Event(UPDATE_EVENT));
   }
   return normalized;
 }
@@ -59,6 +62,7 @@ export function clearControlPlaneClientConfig(): void {
     return;
   }
   window.localStorage.removeItem(STORAGE_KEY);
+  window.dispatchEvent(new Event(UPDATE_EVENT));
 }
 
 export function controlPlaneHeaders(
@@ -76,4 +80,3 @@ export function controlPlaneHeaders(
   }
   return headers;
 }
-

@@ -3,6 +3,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 import type {
+  ApprovalAction,
+  ApprovalRequest,
+  ApprovalState,
   AuditEvent,
   BundleActivation,
   BundleArtifact,
@@ -14,6 +17,8 @@ import type {
   RolloutState
 } from "./types";
 
+type BundleChannelName = "dev" | "staging" | "prod";
+
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "control-plane.json");
 
@@ -23,7 +28,8 @@ const initialData: ControlPlaneData = {
   policyRevisions: [],
   dataRevisions: [],
   bundles: [],
-  bundleActivations: []
+  bundleActivations: [],
+  approvalRequests: []
 };
 
 function normalizeData(data: Partial<ControlPlaneData> | undefined): ControlPlaneData {
@@ -33,7 +39,8 @@ function normalizeData(data: Partial<ControlPlaneData> | undefined): ControlPlan
     policyRevisions: data?.policyRevisions ?? [],
     dataRevisions: data?.dataRevisions ?? [],
     bundles: data?.bundles ?? [],
-    bundleActivations: data?.bundleActivations ?? []
+    bundleActivations: data?.bundleActivations ?? [],
+    approvalRequests: data?.approvalRequests ?? []
   };
 }
 
@@ -211,6 +218,96 @@ export async function listBundleActivations(): Promise<BundleActivation[]> {
     .sort((a, b) => b.activatedAt.localeCompare(a.activatedAt));
 }
 
+export async function listApprovalRequests(state?: ApprovalState): Promise<ApprovalRequest[]> {
+  const data = await readData();
+  const requests = state
+    ? data.approvalRequests.filter((request) => request.state === state)
+    : data.approvalRequests;
+  return requests.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+type CreateApprovalRequestInput = {
+  action: ApprovalAction;
+  bundleId?: string;
+  channel: BundleChannelName;
+  actor?: string;
+  notes?: string;
+};
+
+function currentBundleForChannel(
+  data: ControlPlaneData,
+  channel: BundleChannelName
+): BundleArtifact | undefined {
+  for (const activation of data.bundleActivations
+    .filter((item) => item.channel === channel && item.state === "active")
+    .sort((a, b) => b.activatedAt.localeCompare(a.activatedAt))) {
+    const bundle = data.bundles.find((item) => item.id === activation.bundleId);
+    if (bundle) {
+      return bundle;
+    }
+  }
+  return data.bundles.find((bundle) => bundle.status === "active");
+}
+
+export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+  const data = await readData();
+  const actor = input.actor?.trim() || "control-plane";
+  const now = new Date().toISOString();
+  const channel = input.channel;
+  let bundleId = input.bundleId?.trim() ?? "";
+  if (input.action === "rollback_channel") {
+    const current = currentBundleForChannel(data, channel);
+    if (!current) {
+      throw new Error(`no active bundle found for ${channel}`);
+    }
+    bundleId = current.id;
+  }
+  if (!bundleId) {
+    throw new Error("bundle id is required");
+  }
+  const bundle = data.bundles.find((item) => item.id === bundleId);
+  if (!bundle) {
+    throw new Error("bundle not found");
+  }
+
+  const existing = data.approvalRequests.find(
+    (request) =>
+      request.state === "pending" &&
+      request.action === input.action &&
+      request.channel === channel &&
+      request.bundleId === bundleId
+  );
+  if (existing) {
+    return existing;
+  }
+
+  const created: ApprovalRequest = {
+    id: `ar_${crypto.randomUUID()}`,
+    bundleId,
+    action: input.action,
+    channel,
+    state: "pending",
+    requestedBy: actor,
+    notes: input.notes?.trim() || undefined,
+    createdAt: now,
+    updatedAt: now
+  };
+  data.approvalRequests.push(created);
+  await writeData(data);
+  await appendAuditEvent({
+    action: "approval_requested",
+    actor,
+    metadata: {
+      approvalRequestId: created.id,
+      action: created.action,
+      channel: created.channel,
+      bundleId: created.bundleId,
+      notes: created.notes ?? ""
+    }
+  });
+  return created;
+}
+
 export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
   const data = await readData();
   const now = new Date().toISOString();
@@ -325,4 +422,173 @@ export async function activateBundle(id: string, input: ActivateBundleInput = {}
     }
   });
   return target;
+}
+
+export async function rollbackChannel(
+  channel: BundleChannelName,
+  input: ActivateBundleInput = {}
+): Promise<BundleArtifact | undefined> {
+  const data = await readData();
+  const actor = input.actor?.trim() || "control-plane";
+  const now = new Date().toISOString();
+
+  const currentActivation = data.bundleActivations
+    .filter((activation) => activation.channel === channel && activation.state === "active")
+    .sort((a, b) => b.activatedAt.localeCompare(a.activatedAt))[0];
+  if (!currentActivation) {
+    return undefined;
+  }
+
+  const previousActivation = data.bundleActivations
+    .filter(
+      (activation) =>
+        activation.channel === channel &&
+        activation.state === "active" &&
+        activation.bundleId !== currentActivation.bundleId
+    )
+    .sort((a, b) => b.activatedAt.localeCompare(a.activatedAt))[0];
+  if (!previousActivation) {
+    return undefined;
+  }
+
+  const currentBundle = data.bundles.find((bundle) => bundle.id === currentActivation.bundleId);
+  const previousBundle = data.bundles.find((bundle) => bundle.id === previousActivation.bundleId);
+  if (!currentBundle || !previousBundle) {
+    return undefined;
+  }
+
+  currentBundle.status = "rolled_back";
+  previousBundle.status = "active";
+  if (previousBundle.rolloutState !== "rolled_back") {
+    previousBundle.rolloutState = "enforced";
+  }
+
+  data.bundleActivations.push({
+    id: `ba_${crypto.randomUUID()}`,
+    bundleId: currentBundle.id,
+    channel,
+    state: "rolled_back",
+    activatedBy: actor,
+    activatedAt: now,
+    notes: input.notes ?? "manual rollback"
+  });
+  data.bundleActivations.push({
+    id: `ba_${crypto.randomUUID()}`,
+    bundleId: previousBundle.id,
+    channel,
+    state: "active",
+    activatedBy: actor,
+    activatedAt: now,
+    notes: input.notes ?? "rollback restore"
+  });
+
+  await writeData(data);
+  await appendAuditEvent({
+    action: "bundle_rolled_back",
+    actor,
+    metadata: {
+      channel,
+      restoredBundleId: previousBundle.id,
+      notes: input.notes ?? ""
+    }
+  });
+  return previousBundle;
+}
+
+type ReviewApprovalRequestInput = {
+  actor?: string;
+  notes?: string;
+};
+
+export async function approveApprovalRequest(
+  id: string,
+  input: ReviewApprovalRequestInput = {}
+): Promise<{ approvalRequest: ApprovalRequest; bundle?: BundleArtifact } | undefined> {
+  const data = await readData();
+  const actor = input.actor?.trim() || "control-plane";
+  const request = data.approvalRequests.find((item) => item.id === id);
+  if (!request || request.state !== "pending") {
+    return undefined;
+  }
+
+  let bundle: BundleArtifact | undefined;
+  if (request.action === "promote_bundle") {
+    bundle = await activateBundle(request.bundleId, {
+      actor,
+      notes: input.notes?.trim() || request.notes
+    });
+    if (!bundle) {
+      throw new Error("bundle not found");
+    }
+  } else {
+    bundle = await rollbackChannel(request.channel, {
+      actor,
+      notes: input.notes?.trim() || request.notes
+    });
+    if (!bundle) {
+      throw new Error(`no previous bundle found for channel ${request.channel}`);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const next = await readData();
+  const updated = next.approvalRequests.find((item) => item.id === id);
+  if (!updated || updated.state !== "pending") {
+    throw new Error("approval request is no longer pending");
+  }
+  updated.state = "approved";
+  updated.reviewedBy = actor;
+  updated.reviewedAt = now;
+  updated.reviewNotes = input.notes?.trim() || undefined;
+  updated.updatedAt = now;
+  await writeData(next);
+
+  await appendAuditEvent({
+    action: "approval_approved",
+    actor,
+    metadata: {
+      approvalRequestId: updated.id,
+      action: updated.action,
+      channel: updated.channel,
+      bundleId: updated.bundleId,
+      notes: updated.reviewNotes ?? ""
+    }
+  });
+
+  return {
+    approvalRequest: updated,
+    bundle
+  };
+}
+
+export async function rejectApprovalRequest(
+  id: string,
+  input: ReviewApprovalRequestInput = {}
+): Promise<ApprovalRequest | undefined> {
+  const data = await readData();
+  const actor = input.actor?.trim() || "control-plane";
+  const request = data.approvalRequests.find((item) => item.id === id);
+  if (!request || request.state !== "pending") {
+    return undefined;
+  }
+  const now = new Date().toISOString();
+  request.state = "rejected";
+  request.reviewedBy = actor;
+  request.reviewedAt = now;
+  request.reviewNotes = input.notes?.trim() || undefined;
+  request.updatedAt = now;
+  await writeData(data);
+
+  await appendAuditEvent({
+    action: "approval_rejected",
+    actor,
+    metadata: {
+      approvalRequestId: request.id,
+      action: request.action,
+      channel: request.channel,
+      bundleId: request.bundleId,
+      notes: request.reviewNotes ?? ""
+    }
+  });
+  return request;
 }
