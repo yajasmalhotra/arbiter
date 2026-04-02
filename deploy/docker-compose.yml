@@ -56,7 +56,7 @@ services:
       - redis
 
   opa:
-    # Pin below OPA 1.x: v1 requires `if` before rule bodies; policy/ is classic Rego.
+    # Local compose pins a known-good OPA image; CI policy tests also run against OPA latest.
     image: openpolicyagent/opa:0.69.0
     command:
       - "run"

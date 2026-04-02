@@ -1,76 +1,98 @@
 # Arbiter
 
-Arbiter is a deterministic governance layer for LLM agent tool execution. It sits between an agent runtime (like LiteLLM, LangChain, or direct OpenAI/Anthropic calls) and the tools that agent wants to call. 
+Arbiter is a gatekeeper for LLM agent tool calls. It decides whether a tool call is allowed, and proves that decision with a short-lived signed token that the tool executor must verify before doing real work.
 
-The product goal is simple: **Agent reasoning can stay probabilistic, but tool execution must be deterministic.**
+**Status:** alpha. The repo is in good shape for local demos, technical evaluation, and early pilot deployments.
 
-Instead of relying on an LLM to "judge" if an action is safe, Arbiter normalizes tool-call payloads into a canonical schema, evaluates them against strict Rego policies using Open Policy Agent (OPA), and only allows execution when a short-lived, cryptographically signed policy token is present and valid.
+## Why Arbiter
 
-## Why Arbiter?
+LLM reasoning is probabilistic. Tool execution should not be.
 
-When deploying LLM agents to production, you cannot trust the LLM to police its own tool usage. Prompt injection, hallucinations, and probabilistic reasoning make "LLM-as-a-judge" guardrails unsafe for destructive actions (like `DROP TABLE` or issuing refunds).
+Arbiter sits between an agent runtime and the tools that can cause side effects. Instead of relying on the model to self-police, Arbiter:
 
-Arbiter provides:
-- **Deterministic Enforcement:** Uses OPA and Rego policies. If a rule says "No refunds over $5,000", the LLM cannot bypass it.
-- **Cryptographic Trust:** Issues short-lived, signed JWTs for allowed actions. The tool executor verifies the token, ensuring the request wasn't tampered with.
-- **Replay Protection:** Tokens are bound to the request hash and can only be used once.
-- **Multi-Provider Support:** Normalizes OpenAI, Anthropic, and generic framework payloads into a single canonical schema.
-- **Sequence-Aware Policies:** Integrates with Redis to enforce rules like "You can only delete a database if you backed it up in the last 5 minutes."
+- normalizes provider-specific tool calls into one canonical request shape,
+- evaluates them with deterministic Rego policy in OPA,
+- issues a signed allow token only when policy passes,
+- requires the executor to verify that token again at execution time,
+- blocks replay and records the decision for audit and observability.
 
-## Quick Start
+This gives you a clear control point for actions like SQL, Slack, payments, file access, and other external tools.
 
-### 1. Run the Stack Locally
+## Who It Is For
 
-Arbiter requires OPA and Redis to run. The default Compose stack also includes the control-plane and Postgres so OPA can pull policy bundles through authenticated bundle APIs.
-The control-plane container needs the repo `policy/` tree mounted read-only because bundle archives are assembled from the current Rego sources.
+- Hobbyists who want a real guardrail layer around local agent projects instead of prompt-only safety checks.
+- Teams using LiteLLM, LangChain, OpenAI-style, Anthropic-style, or custom tool-call flows.
+- Enterprise evaluators who care about deterministic policy, trust boundaries, signed approvals, audit trails, and rollout controls.
+
+## What Arbiter Does
+
+- Deterministic policy enforcement with OPA and Rego.
+- Signed allow tokens bound to request hash, tenant, actor, tool, and policy version.
+- Replay protection so one approval cannot be reused.
+- Provider normalization for OpenAI, Anthropic, LangChain-style, and generic framework envelopes.
+- Streamed OpenAI tool-call reconstruction with bounded buffering and an optional early deny gate.
+- Sequence-aware policy by looking up recent actions from Redis.
+- Governance workflows in a control plane for bundle publication, rollout, approval, signing keys, and service tokens.
+
+## What Arbiter Does Not Do
+
+- It does not host models or run your tools for you.
+- It does not replace sandboxing, least-privilege IAM, or secret management.
+- It does not use an LLM as the final safety judge.
+- It is not yet a fully hardened multi-tenant SaaS control plane.
+
+## How It Works
+
+```mermaid
+flowchart LR
+    agent[Agent or Gateway] --> intercept[Arbiter Interceptor]
+    intercept --> normalize[Canonical Normalization]
+    normalize --> state[Optional State Lookup]
+    normalize --> opa[OPA Policy Decision]
+    opa --> token[Signed Allow Token]
+    token --> executor[Tool Executor]
+    executor --> verify[Execution-Time Verify]
+    intercept --> audit[Audit and Metrics]
+    verify --> audit
+    control[Control Plane] --> bundles[Signed Policy Bundles]
+    bundles --> opa
+```
+
+The key design choice is that the control plane stays off the hot path. Enforcement happens in the Go interceptor plus a local OPA sidecar. Governance happens separately through signed policy bundles and rollout workflows.
+
+## Five-Minute Demo
+
+### 1. Start the local stack
 
 ```bash
 docker compose -f deploy/docker-compose.yml up --build -d
 ```
 
 This starts:
-- **Control Plane** on `http://localhost:3000`
-- **Postgres** on `localhost:5432`
-- **Arbiter** on `http://localhost:8080`
-- **OPA** on `http://localhost:8181` (polling `GET /api/bundles/channels/prod/artifact` from the control-plane and verifying `.signatures.json`)
-- **Redis** on `localhost:6379`
 
-By default in `deploy/docker-compose.yml`, Arbiter also writes decision audit events into Postgres (`audit_events`) via `ARBITER_AUDIT_POSTGRES_DSN`.
+- Arbiter on `http://localhost:8080`
+- Control plane on `http://localhost:3000`
+- OPA on `http://localhost:8181`
+- Redis on `localhost:6379`
+- Postgres on `localhost:5432`
 
-Optional **LiteLLM proxy** on `http://localhost:4000` (for client-style harness tests): set `OPENAI_API_KEY`, then run `docker compose -f deploy/docker-compose.yml --profile litellm up -d --build` (see [LiteLLM manual harness](#litellm-manual-harness)).
-
-### 2. Test an Allowed Action
-
-Let's simulate an LLM trying to send a Slack message to the `#ops` channel. Our default policy allows this.
+### 2. Send an allowed tool call
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/intercept/openai \
   -H 'Content-Type: application/json' \
-  -d '{
-    "metadata": {"request_id": "demo-1", "tenant_id": "tenant-demo"},
-    "agent_context": {"actor": {"id": "user-1"}},
-    "tool_call": {
-      "type": "function",
-      "function": {
-        "name": "send_slack_message",
-        "arguments": "{\"channel\":\"ops\",\"message\":\"Deploy finished\"}"
-      }
-    }
-  }'
+  -d @api/examples/openai-intercept-request.json
 ```
 
-**Response:**
-You will receive an HTTP 200 with `"allow": true` and a signed JWT `token`. Your application should extract this token and pass it to the tool executor.
+Expected result: HTTP `200`, `decision.allow: true`, and a non-empty `token`.
 
-### 3. Test a Denied Action
-
-Now let's simulate the LLM trying to drop a database table. Our default policy explicitly denies destructive SQL.
+### 3. Send a denied tool call
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/intercept/openai \
   -H 'Content-Type: application/json' \
   -d '{
-    "metadata": {"request_id": "demo-2", "tenant_id": "tenant-demo"},
+    "metadata": {"request_id": "demo-deny-1", "tenant_id": "tenant-demo"},
     "agent_context": {"actor": {"id": "user-1"}},
     "tool_call": {
       "type": "function",
@@ -82,284 +104,107 @@ curl -s -X POST http://localhost:8080/v1/intercept/openai \
   }'
 ```
 
-**Response:**
-You will receive an HTTP 403 Forbidden with `"allow": false` and no token. The action is blocked deterministically.
+Expected result: HTTP `403`, `decision.allow: false`, and no token.
 
-### 4. Verify the Token at Execution Time
+### 4. Verify the token, then verify it again
 
-Before your actual tool (e.g., your Slack integration) executes the action, it must verify the token with Arbiter to ensure it is valid, hasn't expired, and hasn't been replayed.
+Replace `<SIGNED_ALLOW_TOKEN>` in [canonical-verify-request.json](api/examples/canonical-verify-request.json) with the token from step 2, then run:
 
 ```bash
-curl -s -X POST http://localhost:8080/v1/execute/verify/openai \
+curl -s -X POST http://localhost:8080/v1/execute/verify/canonical \
   -H 'Content-Type: application/json' \
-  -d '{
-    "token": "<PASTE_TOKEN_FROM_STEP_2>",
-    "envelope": {
-      "metadata": {"request_id": "demo-1", "tenant_id": "tenant-demo"},
-      "agent_context": {"actor": {"id": "user-1"}},
-      "tool_call": {
-        "type": "function",
-        "function": {
-          "name": "send_slack_message",
-          "arguments": "{\"channel\":\"ops\",\"message\":\"Deploy finished\"}"
-        }
-      }
-    }
-  }'
+  -d @api/examples/canonical-verify-request.json
 ```
 
-If successful, Arbiter returns `{"status": "verified"}`. If you run this exact same command again, Arbiter will return a 403 `token replay detected` error.
+Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. Running the same request a second time should return HTTP `403` because the token is single-use.
 
-## LiteLLM manual harness
+## Supported Now
 
-Use this when you want a model (via a LiteLLM OpenAI-compatible proxy) to emit a tool call, then run the same **intercept → verify** flow against Arbiter.
+| Capability | Status | Notes |
+|---|---|---|
+| OpenAI-style tool calls | Supported | `POST /v1/intercept/openai` |
+| Streamed OpenAI tool calls | Supported | chunk reconstruction plus optional early deny gate |
+| Anthropic `tool_use` | Supported | `POST /v1/intercept/anthropic` |
+| Generic framework envelopes | Supported | generic and LangChain-style endpoints |
+| Signed allow tokens | Supported | short-lived JWTs with request binding |
+| Replay protection | Supported | memory or Redis-backed |
+| Required context enforcement | Supported | recent-action lookup from state store |
+| Redis-backed temporal state | Supported | sequence-aware policy |
+| Control plane | Supported | policy, bundle, approval, token, and signing-key workflows |
+| Signed OPA bundle distribution | Supported | service-token auth plus bundle signatures |
+| Python integration wrappers | Supported | LiteLLM and OpenClaw/generic wrappers |
+| Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
-### Prerequisites
+## Enterprise Evaluation Notes
 
-1. **Arbiter stack** (from [Quick Start](#1-run-the-stack-locally)): `docker compose -f deploy/docker-compose.yml up --build -d` so Arbiter is on `http://localhost:8080`.
-2. **LiteLLM** (or any OpenAI-compatible gateway) on `http://localhost:4000/v1` with a configured model (see below).
-3. **Python 3** and the harness dependencies:
+- The control plane is not in the decision hot path. Arbiter can continue enforcing with local OPA even if the UI is unavailable.
+- Policies are distributed as signed bundles. OPA fetches them from the control plane with a service token and verifies signatures before activation.
+- Execution requires two checks: intercept-time allow and execution-time token verification.
+- Decisions are traceable by decision ID, policy version, data revision, request ID, and trace ID.
+- Production bundle promotion and rollback can be approval-gated in the control plane.
+- The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
 
-```bash
-cd examples/litellm-harness
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+## Current Limits
 
-### Client-style test: LiteLLM in Docker (no local pip install of LiteLLM)
+- The project is still alpha.
+- Python is the only first-class integration package today.
+- Control-plane multi-tenant governance still needs more hardening before calling it broadly enterprise-ready.
+- Arbiter should be paired with real executor isolation and least-privilege credentials. It is one layer in a defense-in-depth design, not the whole system.
 
-You do **not** need to install the LiteLLM Python package on your machine. Run the official proxy image via Compose (same pattern a client app would use: gateway on port 4000, your app calls it).
+## Docs By Use Case
 
-1. **Get an OpenAI API key** (or change `deploy/litellm-config.yaml` to another provider supported by LiteLLM).
+- Quick evaluation with a real model: [examples/litellm-harness/README.md](examples/litellm-harness/README.md)
+- Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
+- Integration package overview: [integrations/README.md](integrations/README.md)
+- Control plane workflows and APIs: [apps/control-plane/README.md](apps/control-plane/README.md)
+- Pilot soak runbook: [pilot-soak-runbook.md](docs/pilot-soak-runbook.md)
+- Pilot readiness checklist: [pilot-readiness-checklist.md](docs/pilot-readiness-checklist.md)
+- HTTP contract: [openapi.yaml](api/openapi.yaml)
+- Canonical request schema: [canonical-request.v1alpha1.schema.json](api/schemas/canonical-request.v1alpha1.schema.json)
+- Signed decision schema: [signed-decision.schema.json](api/schemas/signed-decision.schema.json)
 
-2. **Start Arbiter and LiteLLM**:
+## API At A Glance
 
-```bash
-export OPENAI_API_KEY=sk-...   # your provider key
-docker compose -f deploy/docker-compose.yml --profile litellm up -d --build
-```
+- `GET /healthz`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /v1/intercept/openai`
+- `POST /v1/intercept/openai/stream`
+- `POST /v1/intercept/openai/stream/race`
+- `POST /v1/intercept/anthropic`
+- `POST /v1/intercept/framework/generic`
+- `POST /v1/intercept/framework/langchain`
+- `POST /v1/execute/verify/openai`
+- `POST /v1/execute/verify/anthropic`
+- `POST /v1/execute/verify/canonical`
+- `POST /v1/state/actions`
 
-This starts Arbiter/OPA/Redis as usual and adds **LiteLLM** on `http://localhost:4000`. The proxy uses `deploy/litellm-config.yaml` and forwards `gpt-4o-mini` to OpenAI using `OPENAI_API_KEY`.
-
-Optional: copy `deploy/env.example` to `deploy/.env`, set `OPENAI_API_KEY`, then run:
-
-```bash
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile litellm up -d --build
-```
-
-3. **Run the harness** (from `examples/litellm-harness` after `pip install -r requirements.txt`). Defaults match the Compose proxy (`LITELLM_BASE_URL=http://localhost:4000/v1`, `LITELLM_API_KEY=sk-anything` matching `LITELLM_MASTER_KEY` in Compose):
-
-```bash
-python3 litellm_arbiter_harness.py allowed
-python3 litellm_arbiter_harness.py denied
-python3 litellm_arbiter_harness.py replay
-```
-
-If you change `LITELLM_MASTER_KEY` in Compose, set `LITELLM_API_KEY` to the same value when running the harness.
-
-### Environment variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `ARBITER_URL` | `http://localhost:8080` | Arbiter HTTP base URL |
-| `LITELLM_BASE_URL` | `http://localhost:4000/v1` | OpenAI-compatible base URL (LiteLLM) |
-| `LITELLM_API_KEY` | `sk-anything` | Bearer token the proxy expects (`LITELLM_MASTER_KEY` in Docker) |
-| `LITELLM_MODEL` | `gpt-4o-mini` | Model name exposed by the proxy (`model_name` in `deploy/litellm-config.yaml`) |
-
-### Run the harness (with LiteLLM)
-
-From `examples/litellm-harness` (with a running LiteLLM-compatible gateway as above):
-
-```bash
-# Allowed: model calls send_slack_message → intercept 200 + token → verify once
-python3 litellm_arbiter_harness.py allowed
-
-# Denied: forced run_sql_query with destructive SQL → intercept 403, allow=false
-python3 litellm_arbiter_harness.py denied
-
-# Replay: same as allowed, then verify twice (second call must 403)
-python3 litellm_arbiter_harness.py replay
-```
-
-**Expected outcomes**
-
-- `allowed` / `replay` (first verify): intercept **200**, `decision.allow: true`, non-empty `token`; verify **200** with `{"status":"verified"}`.
-- `denied`: intercept **403**, `decision.allow: false`, no `token`.
-- `replay` (second verify): **403** with an error body mentioning replay (e.g. `token replay detected`).
-
-### Arbiter-only smoke test (no LiteLLM)
-
-To validate the stack and policies without a running model:
-
-```bash
-python3 litellm_arbiter_harness.py allowed --arbiter-only
-python3 litellm_arbiter_harness.py denied --arbiter-only
-python3 litellm_arbiter_harness.py replay --arbiter-only
-```
-
-### When to use `/v1/intercept/openai/stream`
-
-The harness uses **`POST /v1/intercept/openai`** with a complete tool call in the envelope (typical after a non-streaming chat completion).
-
-If your gateway **streams** tool-call deltas, reconstruct chunks in the shape expected by Arbiter (`metadata`, `agent_context`, optional `required_context`, `chunks` with `function_name` / `arguments_delta`) and send them to **`POST /v1/intercept/openai/stream`** instead. See `internal/translator/openai.go` for the JSON contract.
-
-### Tests
-
-```bash
-cd examples/litellm-harness
-python3 -m unittest test_litellm_arbiter_harness.py -v
-```
-
-## Integration Packages
-
-First-class integration wrappers live under `integrations/`:
-
-- `integrations/python/arbiter_integrations/litellm.py` for OpenAI/LiteLLM tool-call interception and verification.
-- `integrations/python/arbiter_integrations/openclaw.py` for generic framework/OpenClaw interception and canonical verification.
-
-Install locally for development:
-
-```bash
-python3 -m pip install -e integrations/python
-```
-
-Run integration unit tests:
-
-```bash
-python3 -m unittest discover integrations/python/tests -v
-```
-
-Build distributable artifacts:
-
-```bash
-python3 -m pip install build
-python3 -m build integrations/python
-```
-
-## Pilot Soak Validation
-
-Run the pilot soak harness to drive sustained allow/deny/replay traffic and validate metrics movement:
-
-```bash
-python3 tools/pilot/soak_runner.py \
-  --arbiter-url http://localhost:8080 \
-  --duration-seconds 900 \
-  --interval-ms 200
-```
-
-Runbook and pass criteria:
-
-- `docs/pilot-soak-runbook.md`
-- `docs/pilot-readiness-checklist.md`
-
-## API Surface
-
-- `GET /healthz`: Lightweight health endpoint.
-- `GET /readyz`: Readiness endpoint; returns 503 if dependencies are unavailable.
-- `GET /metrics`: Exposes low-overhead in-process counters in Prometheus text format.
-- `POST /v1/intercept/openai`: Normalize an OpenAI-style tool call, evaluate policy, and return a signed token on allow.
-- `POST /v1/intercept/openai/stream`: Reconstruct streamed OpenAI tool-call chunks, then apply normal intercept logic.
-- `POST /v1/intercept/anthropic`: Normalize an Anthropic tool-use payload.
-- `POST /v1/intercept/framework/generic`: Accept framework-native payloads.
-- `POST /v1/execute/verify/openai`: Verify a signed token against the normalized execution request and reject replays.
-- `POST /v1/execute/verify/anthropic`: Verify a signed token for Anthropic-normalized requests.
-- `POST /v1/execute/verify/canonical`: Provider-agnostic verify endpoint for canonical requests.
-- `POST /v1/state/actions`: Record prior actions used for sequence-aware policy checks.
-
-### Optional Trust-Boundary Headers
-
-When auth keys are configured, callers must include:
-
-- `X-Arbiter-Gateway-Key` on intercept routes (`ARBITER_GATEWAY_SHARED_KEY`).
-- `X-Arbiter-Service-Key` on verify/state routes (`ARBITER_SERVICE_SHARED_KEY`).
-
-## Published Contracts
-
-- OpenAPI: `api/openapi.yaml`
-- Canonical schema: `api/schemas/canonical-request.v1alpha1.schema.json`
-- Decision schema: `api/schemas/signed-decision.schema.json`
-- Example payloads: `api/examples/`
+If you configure trust-boundary headers, intercept routes require `X-Arbiter-Gateway-Key` and verify or state routes require `X-Arbiter-Service-Key`.
 
 ## Writing Policies
 
-Policies are written in Rego and evaluated by OPA. 
-- **Core policies** (like schema validation and global invariants) live in `policy/core/`.
-- **Domain policies** (like Slack channel allowlists or Stripe refund caps) live in `policy/domain/`.
-- **Policy data** (configuration values like the actual refund cap amount) live in `policy/data/config.json`.
+Arbiter policy is split into:
 
-To test policies locally:
+- `policy/core/` for global invariants,
+- `policy/domain/` for tool-specific rules,
+- `policy/data/` for static policy data,
+- `policy/tests/` for normal and adversarial policy tests.
+
+Run the local validation loop with:
+
 ```bash
 go test ./...
-docker run --rm -v $(pwd)/policy:/policy:ro openpolicyagent/opa:0.69.0 test /policy/core /policy/domain /policy/tests /policy/data -v
+docker run --rm -v "$PWD/policy:/policy:ro" openpolicyagent/opa:latest test /policy/core /policy/domain /policy/tests /policy/data -v
 ```
-
-## Control Plane UI
-
-Arbiter includes a Next.js application for policy data CRUD, audit review, and shadow simulation.
-By default it falls back to local file storage (`apps/control-plane/.data`). For production-like use, set `ARBITER_DB_URL` (or `DATABASE_URL`) to enable Postgres-backed persistence and automatic SQL migrations from `apps/control-plane/db/migrations`.
-
-```bash
-cd apps/control-plane
-npm install
-npm run dev
-```
-Open `http://localhost:3000` to view the dashboard.
-Use `/operations` for guided bundle release requests, approval decisions, rollback workflows, and key/token management.
-
-### Bundle Lifecycle APIs
-
-- `GET /api/bundles`
-- `POST /api/bundles`
-- `GET /api/bundles/active`
-- `GET /api/bundles/:id`
-- `POST /api/bundles/:id/activate`
-- `POST /api/bundles/:id/promote`
-- `GET /api/bundles/activations`
-- `GET /api/bundles/artifacts/:id`
-- `GET /api/bundles/channels/:channel/manifest`
-- `GET /api/bundles/channels/:channel/artifact`
-- `POST /api/bundles/channels/:channel/rollback`
-- `GET /api/approvals`
-- `POST /api/approvals/:id/approve`
-- `POST /api/approvals/:id/reject`
-- `GET /api/service-tokens`
-- `POST /api/service-tokens`
-- `POST /api/service-tokens/:id/revoke`
-- `GET /api/signing-keys`
-- `POST /api/signing-keys`
-- `POST /api/signing-keys/:id/activate`
-- `POST /api/signing-keys/:id/revoke`
-- `GET /api/revisions`
-
-Mutating control-plane APIs can be protected with `CONTROL_PLANE_API_KEY`, using header `X-Arbiter-Control-Key`.
-When `ARBITER_TENANT_ID` is set, those same routes also require `X-Arbiter-Tenant-ID` to match the deployment tenant.
-When `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, mutation routes also require `X-Arbiter-Role` with sufficient privileges (`editor` or `approver` depending on operation).
-
-Production rollout behavior:
-
-- `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request (does not activate directly).
-- `POST /api/bundles/channels/prod/rollback` creates a pending approval request (does not rollback directly).
-- Only approvers can execute production actions via `/api/approvals/:id/approve` or reject via `/api/approvals/:id/reject`.
-
-Bundle-distribution APIs (`/api/bundles/artifacts/*`, `/api/bundles/channels/*/manifest`, `/api/bundles/channels/*/artifact`) require `Authorization: Bearer <token>`. Configure a bootstrap token with:
-
-- `ARBITER_BUNDLE_SERVICE_TOKEN`
-- `ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES` (default `bundle:read`)
-
-Signed bundle verification configuration:
-
-- In Postgres mode, use the signing-key APIs above to create, activate, and revoke signing keys with audit trails.
-- In fallback mode, signing uses environment bootstrap values:
-
-- `ARBITER_BUNDLE_SIGNING_KEY_ID` (default `arbiter_bundle_hs256`)
-- `ARBITER_BUNDLE_SIGNING_SCOPE` (default `read`)
-- `ARBITER_BUNDLE_SIGNING_SECRET` (shared by control-plane signing and OPA verification in local Compose)
 
 ## Security Invariants
 
-- No tool executes without a valid signed allow token.
-- The executor must verify the token, not just the interceptor.
-- Unknown or malformed provider payloads are denied unless they normalize cleanly.
-- Missing required temporal context causes a deny for policies that depend on it.
-- Every decision is traceable by decision ID, policy version, and data revision.
+- No tool should execute without a valid signed allow token.
+- The executor must verify the token. Upstream approval is not enough.
+- Unknown or malformed tool-call payloads are denied unless they normalize safely.
+- Missing required context should fail closed for context-dependent policies.
+- Policy and data versions should be attached to every decision so the result is explainable later.
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).
