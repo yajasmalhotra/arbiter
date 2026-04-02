@@ -7,8 +7,21 @@ on:
   pull_request:
 
 jobs:
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run repository hygiene scan
+        run: ./tools/ci/secret_history_scan.sh
+
   go-and-policy:
     runs-on: ubuntu-latest
+    needs:
+      - repo-hygiene
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,6 +44,8 @@ jobs:
 
   control-plane:
     runs-on: ubuntu-latest
+    needs:
+      - repo-hygiene
     defaults:
       run:
         working-directory: apps/control-plane
