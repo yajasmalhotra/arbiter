@@ -17,7 +17,7 @@ if git ls-files | grep -E "${generated_path_pattern}|${tracked_file_pattern}" >"
 fi
 
 echo "[scan] checking current tree for secret patterns"
-if git grep -nI -E "$secret_pattern" -- . ':(exclude)package-lock.json' >"$tmp"; then
+if git grep -nI -E "$secret_pattern" -- . ':(exclude)package-lock.json' ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp"; then
   echo "[scan] secret-like content found in current tree:"
   cat "$tmp"
   exit 1
@@ -32,7 +32,7 @@ if [[ -s "$tmp" ]]; then
 fi
 
 echo "[scan] checking reachable history for preview-mode key leakage"
-git grep -nI 'previewModeSigningKey\|previewModeEncryptionKey\|previewModeId' $(git rev-list --all) -- >"$tmp" 2>/dev/null || true
+git grep -nI 'previewModeSigningKey\|previewModeEncryptionKey\|previewModeId' $(git rev-list --all) -- ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" 2>/dev/null || true
 if [[ -s "$tmp" ]]; then
   echo "[scan] preview-mode keys found in reachable history:"
   cat "$tmp"
@@ -40,7 +40,7 @@ if [[ -s "$tmp" ]]; then
 fi
 
 echo "[scan] checking reachable history for common secret patterns"
-git log --all -G "$secret_pattern" --oneline -- . >"$tmp" || true
+git log --all -G "$secret_pattern" --oneline -- . ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" || true
 if [[ -s "$tmp" ]]; then
   echo "[scan] secret-like patterns found in reachable history:"
   cat "$tmp"
