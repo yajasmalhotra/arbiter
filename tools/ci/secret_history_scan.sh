@@ -8,6 +8,7 @@ trap 'rm -f "$tmp"' EXIT
 generated_path_pattern='^apps/control-plane/\.next/|^apps/control-plane/\.data/control-plane\.json$|^apps/control-plane/\.DS_Store$'
 tracked_file_pattern='(^|/)\.env($|\.)|(^|/)id_rsa$|(^|/)id_ed25519$|(^|/).+\.pem$|(^|/).+\.p12$|(^|/).+\.pfx$'
 secret_pattern='BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|previewModeSigningKey|previewModeEncryptionKey'
+history_revset="${ARB_HISTORY_SCAN_REVSET:-HEAD}"
 
 echo "[scan] checking tracked file hygiene"
 if git ls-files | grep -E "${generated_path_pattern}|${tracked_file_pattern}" >"$tmp"; then
@@ -23,26 +24,26 @@ if git grep -nI -E "$secret_pattern" -- . ':(exclude)package-lock.json' ':(exclu
   exit 1
 fi
 
-echo "[scan] checking reachable history for generated artifacts"
-git log --all --name-only --pretty=format: | grep -E "$generated_path_pattern" >"$tmp" || true
+echo "[scan] checking ${history_revset} ancestry for generated artifacts"
+git log "$history_revset" --name-only --pretty=format: | grep -E "$generated_path_pattern" >"$tmp" || true
 if [[ -s "$tmp" ]]; then
-  echo "[scan] generated control-plane artifacts still exist in reachable history:"
+  echo "[scan] generated control-plane artifacts still exist in ${history_revset} ancestry:"
   cat "$tmp"
   exit 1
 fi
 
-echo "[scan] checking reachable history for preview-mode key leakage"
-git grep -nI 'previewModeSigningKey\|previewModeEncryptionKey\|previewModeId' $(git rev-list --all) -- ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" 2>/dev/null || true
+echo "[scan] checking ${history_revset} ancestry for preview-mode key leakage"
+git grep -nI 'previewModeSigningKey\|previewModeEncryptionKey\|previewModeId' $(git rev-list "$history_revset") -- ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" 2>/dev/null || true
 if [[ -s "$tmp" ]]; then
-  echo "[scan] preview-mode keys found in reachable history:"
+  echo "[scan] preview-mode keys found in ${history_revset} ancestry:"
   cat "$tmp"
   exit 1
 fi
 
-echo "[scan] checking reachable history for common secret patterns"
-git log --all -G "$secret_pattern" --oneline -- . ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" || true
+echo "[scan] checking ${history_revset} ancestry for common secret patterns"
+git log "$history_revset" -G "$secret_pattern" --oneline -- . ':(exclude)tools/ci/secret_history_scan.sh' >"$tmp" || true
 if [[ -s "$tmp" ]]; then
-  echo "[scan] secret-like patterns found in reachable history:"
+  echo "[scan] secret-like patterns found in ${history_revset} ancestry:"
   cat "$tmp"
   exit 1
 fi
