@@ -135,6 +135,14 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 | Python integration wrappers | Supported | LiteLLM and OpenClaw/generic wrappers |
 | Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
+## Deployment Stages
+
+| Stage | Best for | Recommended shape | Ready now | Notable gaps |
+|---|---|---|---|---|
+| Local demo | hobby projects, screenshots, quick eval | `docker compose` stack with bundled defaults | Yes | dev secrets, single machine, not internet-facing |
+| Pilot | internal team trial, limited real workflows, design partners | Go interceptor + OPA + Redis + Postgres-backed control plane + signed bundles + audit/metrics | Yes, with operator oversight | more multi-tenant hardening, deployment packaging, and runbook maturity still needed |
+| Production target | business-critical agent workflows | HA deployment, external secret management, hardened identity, key management, monitoring, rollback, isolated executors | Not yet | control-plane hardening, broader integrations, formal support posture, and more operational automation |
+
 ## Enterprise Evaluation Notes
 
 - The control plane is not in the decision hot path. Arbiter can continue enforcing with local OPA even if the UI is unavailable.
@@ -157,6 +165,8 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
 - Integration package overview: [integrations/README.md](integrations/README.md)
 - Control plane workflows and APIs: [apps/control-plane/README.md](apps/control-plane/README.md)
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reporting: [SECURITY.md](SECURITY.md)
 - Pilot soak runbook: [pilot-soak-runbook.md](docs/pilot-soak-runbook.md)
 - Pilot readiness checklist: [pilot-readiness-checklist.md](docs/pilot-readiness-checklist.md)
 - HTTP contract: [openapi.yaml](api/openapi.yaml)
