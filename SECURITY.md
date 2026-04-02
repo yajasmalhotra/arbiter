@@ -13,7 +13,7 @@ Please do not open a public GitHub issue for suspected vulnerabilities.
 Use one of these non-public paths instead:
 
 - GitHub private vulnerability reporting for this repository, if it is enabled.
-- A direct non-public contact path to the maintainer if private reporting is not enabled.
+- Email the maintainer at `malhotra.yajas@gmail.com` if private reporting is not enabled.
 
 Please include:
 
