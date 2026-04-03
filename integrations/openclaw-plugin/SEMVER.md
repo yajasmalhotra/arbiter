@@ -1,6 +1,6 @@
 # Versioning Policy
 
-`@randromeda/openclaw-arbiter` uses Semantic Versioning (`MAJOR.MINOR.PATCH`).
+`@randromeda/arbiter-openclaw` uses Semantic Versioning (`MAJOR.MINOR.PATCH`).
 
 ## Rules
 
@@ -21,3 +21,7 @@
    - `npm test`
 4. Validate package metadata:
    - `npm run pack:check`
+5. Publish:
+   - run `npm run release:tag` (or `npm run release:tag -- --dry-run`) from `integrations/openclaw-plugin`.
+   - alternatively, push git tag `openclaw-plugin-v<version>` manually to trigger CI publish.
+   - workflow `openclaw-plugin-publish` can also be run manually.

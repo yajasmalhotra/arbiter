@@ -13,12 +13,12 @@ Behavior:
 
 Published package target:
 
-1. `@randromeda/openclaw-arbiter`
+1. `@randromeda/arbiter-openclaw`
 
 Install from npm:
 
 ```bash
-openclaw plugins install @randromeda/openclaw-arbiter
+openclaw plugins install @randromeda/arbiter-openclaw
 ```
 
 Install from local path:
@@ -92,3 +92,18 @@ Verify package metadata:
 cd integrations/openclaw-plugin
 npm run pack:check
 ```
+
+## CI Publish
+
+GitHub Actions can publish this package to npm via `.github/workflows/openclaw-plugin-publish.yml`.
+
+Requirements:
+
+- Repository secret `NPM_TOKEN` with publish access to `@randromeda/arbiter-openclaw`.
+
+Publish options:
+
+- Run `npm run release:tag` from `integrations/openclaw-plugin` to create and push `openclaw-plugin-v<version>` automatically.
+- For validation without changing git state, run `npm run release:tag -- --dry-run`.
+- Or push tag `openclaw-plugin-v<version>` manually (must match `package.json` version), for example `openclaw-plugin-v0.1.0`.
+- Or run the `openclaw-plugin-publish` workflow manually from the Actions UI.

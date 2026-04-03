@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@randromeda/openclaw-arbiter` will be documented in this file.
+All notable changes to `@randromeda/arbiter-openclaw` will be documented in this file.
 
 ## [0.1.0] - 2026-04-02
 

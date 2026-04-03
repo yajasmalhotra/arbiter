@@ -1,5 +1,5 @@
 {
-  "name": "@randromeda/openclaw-arbiter",
+  "name": "@randromeda/arbiter-openclaw",
   "version": "0.1.0",
   "description": "OpenClaw native plugin that enforces Arbiter guardrails before tool execution.",
   "license": "Apache-2.0",
@@ -11,6 +11,7 @@
     "index.js",
     "openclaw.plugin.json",
     "src",
+    "scripts",
     "README.md",
     "CHANGELOG.md",
     "SEMVER.md"
@@ -20,7 +21,8 @@
   },
   "scripts": {
     "test": "node --test ./test/*.test.js",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "release:tag": "bash ./scripts/release-tag.sh"
   },
   "openclaw": {
     "extensions": [
