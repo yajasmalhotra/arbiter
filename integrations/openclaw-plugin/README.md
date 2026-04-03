@@ -11,18 +11,11 @@ Behavior:
 
 ## Install
 
-Published package targets:
+Published package target:
 
-1. Primary: `@arbiter/openclaw`
-2. Fallback: `@randromeda/openclaw-arbiter`
+1. `@randromeda/openclaw-arbiter`
 
 Install from npm:
-
-```bash
-openclaw plugins install @arbiter/openclaw
-```
-
-or fallback:
 
 ```bash
 openclaw plugins install @randromeda/openclaw-arbiter

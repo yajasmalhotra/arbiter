@@ -9,7 +9,7 @@ First-class adoption packages live here.
   - Release docs: `integrations/python/CHANGELOG.md`, `integrations/python/SEMVER.md`
 - `openclaw-plugin/`: Native OpenClaw plugin package for hook-level guardrails.
   - Plugin id: `arbiter-openclaw`
-  - Package target: `@arbiter/openclaw` (fallback `@randromeda/openclaw-arbiter`)
+  - Package target: `@randromeda/openclaw-arbiter`
   - Manifest: `integrations/openclaw-plugin/openclaw.plugin.json`
   - Runtime entry: `integrations/openclaw-plugin/index.js`
   - Release docs: `integrations/openclaw-plugin/CHANGELOG.md`, `integrations/openclaw-plugin/SEMVER.md`

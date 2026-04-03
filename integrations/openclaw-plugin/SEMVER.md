@@ -1,6 +1,6 @@
 # Versioning Policy
 
-`@arbiter/openclaw` uses Semantic Versioning (`MAJOR.MINOR.PATCH`).
+`@randromeda/openclaw-arbiter` uses Semantic Versioning (`MAJOR.MINOR.PATCH`).
 
 ## Rules
 
