@@ -17,8 +17,8 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
 - Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
-- Python integration wrappers, LiteLLM harnesses, and pilot soak tooling are present.
-- CI now gates Go tests, OPA policy tests, control-plane tests, and a Dockerized OPA bundle smoke run.
+- Python integration wrappers, LiteLLM harnesses, pilot soak tooling, and a native OpenClaw plugin package (`@randromeda/openclaw-arbiter`) are present.
+- CI gates repository hygiene, Go tests, OPA policy tests, control-plane tests, OpenClaw plugin tests, and a Dockerized OPA bundle smoke run.
 - Remaining work is mostly production hardening: multi-tenant governance, live pilot execution, dashboard/alert validation, and release automation.
 
 ## Runtime Model
@@ -238,6 +238,8 @@ Control-plane storage behavior:
 - The bundle signer uses the active DB-backed signing key when Postgres is enabled.
 - Environment signing values seed or bootstrap the signing path when DB state is unavailable.
 - The control-plane bundle builder reads directly from the mounted `policy/` tree, so Docker/Compose runs must provide `ARBITER_POLICY_ROOT=/policy` and mount that directory read-only.
+- Bundle archive output includes `.manifest`, policy files from `policy/core` and `policy/domain`, `data.json`, `snapshot.json`, and `.signatures.json`.
+- The artifact route may auto-bootstrap a first prod bundle when no prod channel is active yet.
 - Signing keys are audited on create, activate, and revoke.
 
 ### `integrations/python/`
@@ -259,6 +261,8 @@ This is the native OpenClaw plugin package for in-process hook enforcement.
 - `src/guardrail.js` executes intercept + verify before protected tool execution and records post-call outcomes.
 - `openclaw.plugin.json` defines plugin id, schema, and UI hints for OpenClaw config validation.
 - `README.md`, `CHANGELOG.md`, and `SEMVER.md` define install and release behavior.
+- The npm package target is `@randromeda/openclaw-arbiter`.
+- Default protected tools are `exec`, `process`, `write`, `edit`, and `apply_patch`.
 
 Use this package as the default OpenClaw integration path for hobbyist and pilot setups.
 
@@ -279,6 +283,27 @@ This script is the pilot soak harness.
 - It measures latency and compares `/metrics` against a baseline.
 
 Use this script for live pilot validation, not as a unit test replacement.
+
+### `tools/ci/`
+
+This directory contains CI-critical scripts used by GitHub Actions.
+
+- `secret_history_scan.sh` enforces repository hygiene by scanning tracked files, current tree content, and reachable history for secret-like patterns and generated control-plane artifacts.
+- `opa_bundle_smoke.sh` boots the Docker stack, waits for control-plane artifact endpoint readiness, verifies OPA bundle activation, and fails on digest mismatch or activation timeout.
+
+These scripts should stay deterministic and non-interactive so CI failures are actionable.
+
+### `.github/workflows/ci.yml`
+
+The repository CI workflow runs in this order:
+
+1. `repo-hygiene` (`./tools/ci/secret_history_scan.sh`)
+2. `go-and-policy` (`go test ./...` and `opa test ...`)
+3. `control-plane` (`npm ci` and `npm run test` in `apps/control-plane`)
+4. `openclaw-plugin` (`npm ci`, `npm test`, and package smoke check)
+5. `bundle-smoke` (`./tools/ci/opa_bundle_smoke.sh`)
+
+Use this job order when reproducing CI issues locally.
 
 ### `deploy/`
 
@@ -325,11 +350,13 @@ Update these files when request/response shapes change.
 
 ## Testing And Validation
 
+- Run `./tools/ci/secret_history_scan.sh` for repository hygiene and secret-pattern checks before opening PRs.
 - Run `go test ./...` for Go code.
 - Run `opa test` against `policy/core`, `policy/domain`, `policy/tests`, and `policy/data`.
-- Run `npm run build` in `apps/control-plane` after control-plane changes.
+- Run `npm run test` and `npm run build` in `apps/control-plane` after control-plane changes.
 - Run `python3 -m unittest discover integrations/python/tests -v` for Python packaging changes.
 - Run `npm test` in `integrations/openclaw-plugin` for native OpenClaw plugin changes.
+- Run `npm run pack:check` in `integrations/openclaw-plugin` when package metadata or publish config changes.
 - Run `python3 tools/pilot/soak_runner.py` for pilot readiness checks.
 - Run `./tools/ci/opa_bundle_smoke.sh` when Docker is available to validate control-plane bundle serving and OPA bundle activation.
 
