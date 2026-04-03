@@ -13,6 +13,8 @@ It wraps Arbiter intercept and verify APIs while handling shared-key headers.
 python3 -m pip install -e integrations/python
 ```
 
+If `base_url` is omitted, the client auto-discovers local runtime settings from `~/.arbiter/config.json` and falls back to `http://localhost:8080`.
+
 ## Layout
 
 - `arbiter_integrations/http_client.py`: HTTP transport + auth headers.
@@ -25,11 +27,7 @@ python3 -m pip install -e integrations/python
 from arbiter_integrations.http_client import ArbiterHTTPClient
 from arbiter_integrations.litellm import LiteLLMGuardrail
 
-client = ArbiterHTTPClient(
-    "http://localhost:8080",
-    gateway_shared_key="gw-key",
-    service_shared_key="svc-key",
-)
+client = ArbiterHTTPClient("http://localhost:8080")
 guard = LiteLLMGuardrail(client, tenant_id="tenant-demo", actor_id="agent-42")
 
 status, body = guard.intercept_tool_call(
@@ -55,7 +53,7 @@ assert verify_status == 200 and verify_body.get("status") == "verified"
 from arbiter_integrations.http_client import ArbiterHTTPClient
 from arbiter_integrations.openclaw import OpenClawGuardrail
 
-client = ArbiterHTTPClient("http://localhost:8080")
+client = ArbiterHTTPClient()  # auto-discovers local runtime config when present
 guard = OpenClawGuardrail(client, tenant_id="tenant-demo", actor_id="agent-99")
 
 status, body = guard.intercept_action(

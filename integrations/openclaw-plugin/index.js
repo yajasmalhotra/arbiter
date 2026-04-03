@@ -9,8 +9,7 @@ export default definePluginEntry({
     const guardrail = createArbiterGuardrail({
       pluginConfig: api.pluginConfig,
       logger: api.logger,
-      fetchImpl: globalThis.fetch,
-      env: process.env
+      fetchImpl: globalThis.fetch
     });
 
     api.on("before_tool_call", guardrail.beforeToolCall);

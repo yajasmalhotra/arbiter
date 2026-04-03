@@ -31,7 +31,11 @@ function configError(config) {
   if (!config.missing.length) {
     return "";
   }
-  return `arbiter plugin misconfigured: missing ${config.missing.join(", ")}`;
+  let hint = "";
+  if (config.missing.includes("arbiterUrl") || config.missing.includes("tenantId")) {
+    hint = " (run `go run ./cmd/arbiter local init` and `go run ./cmd/arbiter local start`, or set arbiterUrl/tenantId explicitly)";
+  }
+  return `arbiter plugin misconfigured: missing ${config.missing.join(", ")}${hint}`;
 }
 
 function serviceHeaders(config) {
@@ -45,10 +49,9 @@ function gatewayHeaders(config) {
 export function createArbiterGuardrail({
   pluginConfig,
   logger,
-  fetchImpl = globalThis.fetch,
-  env = process.env
+  fetchImpl = globalThis.fetch
 }) {
-  const config = resolvePluginConfig(pluginConfig, env);
+  const config = resolvePluginConfig(pluginConfig);
   const protectedTools = new Set(config.protectTools);
 
   async function beforeToolCall(event, ctx) {

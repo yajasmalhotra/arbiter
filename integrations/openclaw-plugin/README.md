@@ -29,7 +29,28 @@ openclaw plugins install ./integrations/openclaw-plugin
 
 ## Config
 
-Add plugin config under `plugins.entries.arbiter-openclaw.config` in your OpenClaw config:
+The plugin auto-discovers local runtime settings from `~/.arbiter/config.json` by default.
+
+Minimal local config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "arbiter-openclaw": {
+        "enabled": true,
+        "config": {
+          "protectTools": ["exec", "process", "write", "edit", "apply_patch"],
+          "recordState": true,
+          "failClosed": true
+        }
+      }
+    }
+  }
+}
+```
+
+Optional explicit config (for non-local or customized setups):
 
 ```json
 {
@@ -41,10 +62,7 @@ Add plugin config under `plugins.entries.arbiter-openclaw.config` in your OpenCl
           "arbiterUrl": "http://localhost:8080",
           "tenantId": "tenant-demo",
           "gatewayKey": "gw-key",
-          "serviceKey": "svc-key",
-          "protectTools": ["exec", "process", "write", "edit", "apply_patch"],
-          "recordState": true,
-          "failClosed": true
+          "serviceKey": "svc-key"
         }
       }
     }
@@ -54,8 +72,9 @@ Add plugin config under `plugins.entries.arbiter-openclaw.config` in your OpenCl
 
 Config options:
 
-- `arbiterUrl`: Arbiter base URL.
-- `tenantId`: Tenant ID for canonical requests and state records.
+- `arbiterUrl`: Arbiter base URL. Defaults from local runtime config when available.
+- `localConfigPath`: Optional override path for local runtime config. Defaults to `~/.arbiter/config.json`.
+- `tenantId`: Tenant ID for canonical requests and state records. Defaults from local runtime config when available.
 - `gatewayKey`: Optional key for intercept routes.
 - `serviceKey`: Optional key for verify/state routes.
 - `actorIdMode`: `agent-id` (default) or `config`.
@@ -64,6 +83,13 @@ Config options:
 - `recordState`: Record outcomes to `/v1/state/actions` (default `true`).
 - `failClosed`: Block on Arbiter errors (default `true`).
 - `timeoutMs`: Per-request timeout (default `5000`).
+
+Local runtime quick setup:
+
+```bash
+go run ./cmd/arbiter local init
+go run ./cmd/arbiter local start
+```
 
 ## Stock OpenClaw Tool Mapping
 

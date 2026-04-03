@@ -2,6 +2,12 @@
 
 All notable changes to `@randromeda/arbiter-openclaw` will be documented in this file.
 
+## [0.1.1] - 2026-04-03
+
+- Added local runtime auto-discovery from `~/.arbiter/config.json`.
+- Added optional `localConfigPath` override in plugin config.
+- Removed environment-variable fallback wiring from plugin runtime setup.
+
 ## [0.1.0] - 2026-04-02
 
 - Initial native OpenClaw plugin implementation.
