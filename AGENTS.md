@@ -313,6 +313,13 @@ This directory contains CI-critical scripts used by GitHub Actions.
 
 These scripts should stay deterministic and non-interactive so CI failures are actionable.
 
+### `tools/release/`
+
+This directory contains release automation helpers for runtime distribution.
+
+- `build_arbiter_artifacts.sh` builds versioned `arbiter` archives for macOS/Linux amd64+arm64 and writes `dist/checksums.txt`.
+- `render_homebrew_formula.sh` renders a Homebrew `Formula/arbiter.rb` from release checksums and GitHub release URLs.
+
 ### `.github/workflows/ci.yml`
 
 The repository CI workflow runs in this order:
@@ -324,6 +331,14 @@ The repository CI workflow runs in this order:
 5. `bundle-smoke` (`./tools/ci/opa_bundle_smoke.sh`)
 
 Use this job order when reproducing CI issues locally.
+
+### `.github/workflows/arbiter-release.yml`
+
+This workflow handles Arbiter runtime release automation.
+
+- Triggered by `arbiter-v*` tags or manual dispatch.
+- Runs Go tests, builds CLI release archives, and publishes GitHub release assets.
+- Optionally updates a Homebrew tap formula using `HOMEBREW_TAP_TOKEN` and optional `HOMEBREW_TAP_REPO`.
 
 ### `deploy/`
 
