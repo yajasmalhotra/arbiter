@@ -344,6 +344,7 @@ Update these files when request/response shapes change.
 - Use `context.Context` consistently for cancellation and deadlines.
 - Reject unknown or ambiguous payloads unless they normalize safely.
 - Version policy and data artifacts so every decision is traceable.
+- Always switch back to `master` before checking out or creating a new branch.
 - When adding a new service or package, update `README.md` if the public setup or architecture changes.
 - When adding or changing a service boundary, update this file.
 - Keep examples aligned with `schema.CurrentSchemaVersion`.
