@@ -2090,6 +2090,7 @@ function signBundleFiles(files: BundleSignatureFile[], signing: BundleSigningCon
 
 async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   const pack = tar.pack();
+  const tarBufferPromise = streamToBuffer(pack);
   const createdAt = bundle.createdAt;
   const issuedAtUnix = Math.floor(new Date(createdAt).getTime() / 1000);
   const signing = await resolveBundleSigningConfig();
@@ -2181,7 +2182,7 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   }
 
   pack.finalize();
-  const tarBuffer = await streamToBuffer(pack);
+  const tarBuffer = await tarBufferPromise;
   return gzip(tarBuffer);
 }
 
