@@ -27,6 +27,7 @@ This gives you a clear control point for actions like SQL, Slack, payments, file
 ## What Arbiter Does
 
 - Deterministic policy enforcement with OPA and Rego.
+- Example policy packs for SQL, Slack, Stripe, and OpenClaw-style filesystem and shell guardrails.
 - Signed allow tokens bound to request hash, tenant, actor, tool, and policy version.
 - Replay protection so one approval cannot be reused.
 - Provider normalization for OpenAI, Anthropic, LangChain-style, and generic framework envelopes.

@@ -79,3 +79,64 @@ test_required_context_without_history_denied if {
 	not result.allow
 	result.required_context_missing
 }
+
+test_shell_rm_rf_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-6"
+		},
+		"tool_name": "run_shell_command",
+		"parameters": {
+			"command": "rm -rf /tmp/cache"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_shell_argv_delete_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-7"
+		},
+		"tool_name": "execute_command",
+		"parameters": {
+			"argv": ["rm", "-rf", "/tmp/cache"]
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_shell_find_delete_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-8"
+		},
+		"tool_name": "bash",
+		"parameters": {
+			"cmd": "find /tmp -name '*.tmp' -delete"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_delete_directory_tool_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-9"
+		},
+		"tool_name": "delete_directory",
+		"parameters": {
+			"path": "/tmp/cache",
+			"recursive": true
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}

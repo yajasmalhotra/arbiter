@@ -18,6 +18,36 @@
     },
     "create_stripe_refund": {
       "domain": "stripe"
+    },
+    "read_file": {
+      "domain": "filesystem"
+    },
+    "list_directory": {
+      "domain": "filesystem"
+    },
+    "stat_path": {
+      "domain": "filesystem"
+    },
+    "run_shell_command": {
+      "domain": "filesystem"
+    },
+    "run_command": {
+      "domain": "filesystem"
+    },
+    "execute_command": {
+      "domain": "filesystem"
+    },
+    "bash": {
+      "domain": "filesystem"
+    },
+    "delete_file": {
+      "domain": "filesystem"
+    },
+    "delete_directory": {
+      "domain": "filesystem"
+    },
+    "remove_path": {
+      "domain": "filesystem"
     }
   },
   "domain_config": {

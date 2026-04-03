@@ -193,7 +193,7 @@ Use these helpers when bundle identity needs to remain consistent across control
 This directory contains the Rego policy system and bundle metadata.
 
 - `policy/core/authz.rego` is the system-wide policy gate.
-- `policy/domain/sql.rego`, `slack.rego`, and `stripe.rego` are current tool-specific allow rules.
+- `policy/domain/sql.rego`, `slack.rego`, `stripe.rego`, and `filesystem.rego` are current tool-specific allow rules.
 - `policy/data/config.json` holds the data used by policy.
 - `policy/arbiter.json` defines the tool registry and bundle metadata that OPA expects.
 - `policy/tests/` contains normal, regression, and adversarial fixtures.

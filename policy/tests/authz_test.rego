@@ -103,3 +103,48 @@ test_stripe_refund_over_cap_denied if {
 
 	not result.allow
 }
+
+test_openclaw_read_file_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-7"
+		},
+		"tool_name": "read_file",
+		"parameters": {
+			"path": "/tmp/notes.txt"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
+test_openclaw_shell_list_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-8"
+		},
+		"tool_name": "run_shell_command",
+		"parameters": {
+			"command": "ls -la /tmp"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
+test_openclaw_delete_file_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-9"
+		},
+		"tool_name": "delete_file",
+		"parameters": {
+			"path": "/tmp/notes.txt"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
