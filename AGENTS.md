@@ -17,7 +17,7 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
 - Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
-- Python integration wrappers, LiteLLM harnesses, pilot soak tooling, and a native OpenClaw plugin package (`@randromeda/openclaw-arbiter`) are present.
+- Python integration wrappers, LiteLLM harnesses, pilot soak tooling, and a native OpenClaw plugin package (`@randromeda/arbiter-openclaw`) are present.
 - CI gates repository hygiene, Go tests, OPA policy tests, control-plane tests, OpenClaw plugin tests, and a Dockerized OPA bundle smoke run.
 - Remaining work is mostly production hardening: multi-tenant governance, live pilot execution, dashboard/alert validation, and release automation.
 
@@ -261,7 +261,7 @@ This is the native OpenClaw plugin package for in-process hook enforcement.
 - `src/guardrail.js` executes intercept + verify before protected tool execution and records post-call outcomes.
 - `openclaw.plugin.json` defines plugin id, schema, and UI hints for OpenClaw config validation.
 - `README.md`, `CHANGELOG.md`, and `SEMVER.md` define install and release behavior.
-- The npm package target is `@randromeda/openclaw-arbiter`.
+- The npm package target is `@randromeda/arbiter-openclaw`.
 - Default protected tools are `exec`, `process`, `write`, `edit`, and `apply_patch`.
 
 Use this package as the default OpenClaw integration path for hobbyist and pilot setups.
