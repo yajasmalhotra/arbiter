@@ -63,6 +63,11 @@ The key design choice is that the control plane stays off the hot path. Enforcem
 
 ## Two-Minute Local Runtime (No Docker)
 
+Install options:
+
+- Source run: `go run ./cmd/arbiter local ...` (available now in-repo)
+- Homebrew (after formula publish): `brew tap yajasmalhotra/homebrew-tap && brew install arbiter`
+
 ### 1. Initialize local runtime config
 
 ```bash
@@ -206,6 +211,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Security reporting: [SECURITY.md](SECURITY.md)
 - Pilot soak runbook: [pilot-soak-runbook.md](docs/pilot-soak-runbook.md)
 - Pilot readiness checklist: [pilot-readiness-checklist.md](docs/pilot-readiness-checklist.md)
+- Homebrew release automation: [homebrew-release.md](docs/homebrew-release.md)
 - HTTP contract: [openapi.yaml](api/openapi.yaml)
 - Canonical request schema: [canonical-request.v1alpha1.schema.json](api/schemas/canonical-request.v1alpha1.schema.json)
 - Signed decision schema: [signed-decision.schema.json](api/schemas/signed-decision.schema.json)
