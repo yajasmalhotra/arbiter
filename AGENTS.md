@@ -14,6 +14,7 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - The Go interceptor hot path is implemented: OpenAI, Anthropic, generic framework, and streamed OpenAI tool-call inputs are normalized, evaluated, and signed.
 - Token verification is enforced at execution time with replay protection.
 - Redis-backed prior-action context is in place for sequence-aware policies.
+- A local no-Docker runtime path is available via `go run ./cmd/arbiter local init|start|status` with embedded policy evaluation and file-backed local state.
 - The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
 - Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
@@ -27,8 +28,8 @@ Arbiter is a gate, not a judge. The intended flow is:
 
 1. Client or agent sends a tool-call request to a gateway or directly to the interceptor.
 2. The interceptor normalizes the provider payload into `internal/schema.CanonicalRequest`.
-3. Optional prior-action context is pulled from Redis when required by policy.
-4. OPA evaluates Rego policy against the canonical request.
+3. Optional prior-action context is pulled from Redis or local embedded storage when required by policy.
+4. OPA evaluates Rego policy against the canonical request (remote OPA endpoint or embedded local evaluator).
 5. If policy allows, the interceptor issues a short-lived signed token bound to the request hash.
 6. The tool executor verifies the token again before side effects happen.
 7. Audit and telemetry record the decision without blocking the hot path.
@@ -56,6 +57,14 @@ Important environment variables:
 - `ARBITER_REDIS_ADDR` enables Redis-backed state and replay caches.
 - `ARBITER_GATEWAY_SHARED_KEY` and `ARBITER_SERVICE_SHARED_KEY` gate trust-boundary routes.
 - `ARBITER_FAST_ALLOWED_TOOLS` defines the allowlist used by the streamed race-gate route.
+
+### `cmd/arbiter/`
+
+This is the local-runtime CLI entrypoint.
+
+- `arbiter local init` creates local config and data directories under `~/.arbiter`.
+- `arbiter local start` runs Arbiter with embedded policy evaluation and file-backed local state/replay storage.
+- `arbiter local status` checks local runtime health using configured base URL.
 
 ### `internal/interceptor/`
 
@@ -119,6 +128,15 @@ This is the OPA client.
 - `Ready` checks the OPA health endpoint.
 
 This package should remain deterministic and cheap. Do not add live remote lookups to the hot path.
+
+### `internal/local/`
+
+This package supports the no-Docker local runtime mode.
+
+- Embedded policy/data assets are loaded from `internal/local/policy`.
+- `Decider` evaluates canonical requests in-process using OPA Rego APIs.
+- `Store` persists prior actions and replay markers in a local bbolt database.
+- `Config` manages `~/.arbiter/config.json` defaults and initialization.
 
 ### `internal/executorauth/`
 
@@ -249,6 +267,7 @@ This is the first-class Python integration package.
 - `arbiter_integrations.litellm` wraps OpenAI/LiteLLM-style tool calls.
 - `arbiter_integrations.openclaw` wraps generic or OpenClaw-style tool calls.
 - `http_client.py` handles HTTP transport and shared-key headers.
+- Python HTTP client can auto-discover local runtime base URL from `~/.arbiter/config.json`.
 - `pyproject.toml`, `CHANGELOG.md`, and `SEMVER.md` define packaging and release behavior.
 
 Use this package when users want a small client-side wrapper instead of writing raw HTTP calls.
@@ -259,6 +278,7 @@ This is the native OpenClaw plugin package for in-process hook enforcement.
 
 - `index.js` registers `before_tool_call` and `after_tool_call` hooks via OpenClaw plugin SDK entrypoints.
 - `src/guardrail.js` executes intercept + verify before protected tool execution and records post-call outcomes.
+- Plugin config resolution supports local runtime auto-discovery from `~/.arbiter/config.json`.
 - `openclaw.plugin.json` defines plugin id, schema, and UI hints for OpenClaw config validation.
 - `README.md`, `CHANGELOG.md`, and `SEMVER.md` define install and release behavior.
 - The npm package target is `@randromeda/arbiter-openclaw`.
@@ -344,7 +364,11 @@ Update these files when request/response shapes change.
 - Use `context.Context` consistently for cancellation and deadlines.
 - Reject unknown or ambiguous payloads unless they normalize safely.
 - Version policy and data artifacts so every decision is traceable.
+<<<<<<< Updated upstream
 - Always switch back to `master` before checking out or creating a new branch.
+=======
+- Any change to an npm package must include a `package.json` version bump (`patch`, `minor`, or `major`) appropriate to the impact.
+>>>>>>> Stashed changes
 - When adding a new service or package, update `README.md` if the public setup or architecture changes.
 - When adding or changing a service boundary, update this file.
 - Keep examples aligned with `schema.CurrentSchemaVersion`.

@@ -1,21 +1,46 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import urllib.error
 import urllib.request
 from typing import Any
 
 
+def _discover_local_base_url() -> str:
+    config_path = os.environ.get("ARBITER_LOCAL_CONFIG_PATH", str(Path.home() / ".arbiter" / "config.json"))
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "http://localhost:8080"
+
+    if isinstance(data, dict):
+        base_url = str(data.get("base_url", "")).strip()
+        if base_url:
+            return base_url.rstrip("/")
+        address = str(data.get("address", "")).strip()
+        if address:
+            if address.startswith("http://") or address.startswith("https://"):
+                return address.rstrip("/")
+            return f"http://{address}"
+    return "http://localhost:8080"
+
+
 class ArbiterHTTPClient:
     def __init__(
         self,
-        base_url: str,
+        base_url: str = "",
         *,
         gateway_shared_key: str = "",
         service_shared_key: str = "",
         timeout_seconds: float = 10.0,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        resolved = base_url.strip() if isinstance(base_url, str) else ""
+        if not resolved:
+            resolved = _discover_local_base_url()
+        self.base_url = resolved.rstrip("/")
         self.gateway_shared_key = gateway_shared_key.strip()
         self.service_shared_key = service_shared_key.strip()
         self.timeout_seconds = timeout_seconds

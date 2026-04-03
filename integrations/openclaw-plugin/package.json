@@ -1,6 +1,6 @@
 {
   "name": "@randromeda/arbiter-openclaw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenClaw native plugin that enforces Arbiter guardrails before tool execution.",
   "license": "Apache-2.0",
   "type": "module",

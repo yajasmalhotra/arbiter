@@ -32,7 +32,7 @@ This gives you a clear control point for actions like SQL, Slack, payments, file
 - Replay protection so one approval cannot be reused.
 - Provider normalization for OpenAI, Anthropic, LangChain-style, and generic framework envelopes.
 - Streamed OpenAI tool-call reconstruction with bounded buffering and an optional early deny gate.
-- Sequence-aware policy by looking up recent actions from Redis.
+- Sequence-aware policy by looking up recent actions from Redis or local embedded storage.
 - Governance workflows in a control plane for bundle publication, rollout, approval, signing keys, and service tokens.
 
 ## What Arbiter Does Not Do
@@ -59,7 +59,39 @@ flowchart LR
     bundles --> opa
 ```
 
-The key design choice is that the control plane stays off the hot path. Enforcement happens in the Go interceptor plus a local OPA sidecar. Governance happens separately through signed policy bundles and rollout workflows.
+The key design choice is that the control plane stays off the hot path. Enforcement happens in the interceptor plus local policy evaluation. Governance happens separately through signed policy bundles and rollout workflows.
+
+## Two-Minute Local Runtime (No Docker)
+
+### 1. Initialize local runtime config
+
+```bash
+go run ./cmd/arbiter local init
+```
+
+This creates `~/.arbiter/config.json` with local defaults, local data storage, and a signing secret.
+
+### 2. Start local runtime
+
+```bash
+go run ./cmd/arbiter local start
+```
+
+Local runtime listens on `http://127.0.0.1:8080` by default.
+
+### 3. Check runtime status
+
+```bash
+go run ./cmd/arbiter local status
+```
+
+### 4. Send an allowed tool call
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/intercept/openai \
+  -H 'Content-Type: application/json' \
+  -d @api/examples/openai-intercept-request.json
+```
 
 ## Five-Minute Demo
 
@@ -130,11 +162,13 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 | Signed allow tokens | Supported | short-lived JWTs with request binding |
 | Replay protection | Supported | memory or Redis-backed |
 | Required context enforcement | Supported | recent-action lookup from state store |
-| Redis-backed temporal state | Supported | sequence-aware policy |
+| Redis-backed temporal state | Supported | sequence-aware policy for distributed deployments |
+| Local embedded temporal state | Supported (alpha) | sequence-aware policy for no-Docker local runtime |
 | Control plane | Supported | policy, bundle, approval, token, and signing-key workflows |
 | Signed OPA bundle distribution | Supported | service-token auth plus bundle signatures |
 | Python integration wrappers | Supported | LiteLLM and OpenClaw/generic wrappers |
 | OpenClaw native plugin | Supported (alpha) | `integrations/openclaw-plugin` (`before_tool_call` + verify + state record) |
+| Local runtime (no Docker) | Supported (alpha) | `go run ./cmd/arbiter local init/start/status` |
 | Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
 ## Deployment Stages

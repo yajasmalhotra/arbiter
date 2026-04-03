@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 export const DEFAULT_PROTECT_TOOLS = ["exec", "process", "write", "edit", "apply_patch"];
 export const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -36,15 +40,38 @@ function normalizeToolList(value) {
   return tools.length > 0 ? Array.from(new Set(tools)) : DEFAULT_PROTECT_TOOLS.slice();
 }
 
-export function resolvePluginConfig(pluginConfig, env = process.env) {
-  const cfg = asRecord(pluginConfig);
-  const runtimeEnv = asRecord(env);
+function readLocalRuntimeConfig(customPath) {
+  const location = customPath || path.join(os.homedir(), ".arbiter", "config.json");
+  try {
+    const raw = fs.readFileSync(location, "utf8");
+    const parsed = JSON.parse(raw);
+    return asRecord(parsed);
+  } catch {
+    return {};
+  }
+}
 
-  const arbiterUrl = asString(cfg.arbiterUrl) || asString(runtimeEnv.ARBITER_URL);
-  const tenantId = asString(cfg.tenantId) || asString(runtimeEnv.ARBITER_TENANT_ID);
-  const gatewayKey = asString(cfg.gatewayKey) || asString(runtimeEnv.ARBITER_GATEWAY_SHARED_KEY);
-  const serviceKey = asString(cfg.serviceKey) || asString(runtimeEnv.ARBITER_SERVICE_SHARED_KEY);
-  const actorId = asString(cfg.actorId) || asString(runtimeEnv.ARBITER_ACTOR_ID);
+function baseURLFromAddress(address) {
+  if (!address) {
+    return "";
+  }
+  if (address.startsWith("http://") || address.startsWith("https://")) {
+    return address;
+  }
+  return `http://${address}`;
+}
+
+export function resolvePluginConfig(pluginConfig) {
+  const cfg = asRecord(pluginConfig);
+  const localConfigPath = asString(cfg.localConfigPath);
+  const localConfig = readLocalRuntimeConfig(localConfigPath);
+  const localURL = asString(localConfig.base_url) || baseURLFromAddress(asString(localConfig.address));
+
+  const arbiterUrl = asString(cfg.arbiterUrl) || localURL;
+  const tenantId = asString(cfg.tenantId) || asString(localConfig.tenant_id);
+  const gatewayKey = asString(cfg.gatewayKey);
+  const serviceKey = asString(cfg.serviceKey);
+  const actorId = asString(cfg.actorId);
 
   const actorIdMode = asString(cfg.actorIdMode) === "config" ? "config" : "agent-id";
   const protectTools = normalizeToolList(cfg.protectTools);
@@ -74,6 +101,7 @@ export function resolvePluginConfig(pluginConfig, env = process.env) {
     recordState,
     failClosed,
     timeoutMs,
+    localConfigPath,
     missing
   };
 }
