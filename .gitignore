@@ -12,6 +12,7 @@ apps/control-plane/.env.local
 apps/control-plane/.env.development.local
 apps/control-plane/.env.test.local
 apps/control-plane/.env.production.local
+integrations/openclaw-plugin/node_modules/
 examples/litellm-harness/.venv/
 .venv/
 __pycache__/

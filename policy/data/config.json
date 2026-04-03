@@ -49,6 +49,24 @@
       },
       "remove_path": {
         "domain": "filesystem"
+      },
+      "exec": {
+        "domain": "filesystem"
+      },
+      "process": {
+        "domain": "filesystem"
+      },
+      "read": {
+        "domain": "filesystem"
+      },
+      "write": {
+        "domain": "filesystem"
+      },
+      "edit": {
+        "domain": "filesystem"
+      },
+      "apply_patch": {
+        "domain": "filesystem"
       }
     },
     "domain_config": {

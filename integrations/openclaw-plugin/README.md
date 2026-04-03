@@ -1,0 +1,101 @@
+# OpenClaw Native Plugin
+
+This package provides a native OpenClaw plugin that enforces Arbiter policy decisions for protected tool calls.
+
+Behavior:
+
+- Intercepts protected tools in `before_tool_call`.
+- Calls Arbiter `POST /v1/intercept/framework/generic`.
+- Requires successful Arbiter verify via `POST /v1/execute/verify/canonical` before execution.
+- Records post-call outcomes to `POST /v1/state/actions` (enabled by default).
+
+## Install
+
+Published package targets:
+
+1. Primary: `@arbiter/openclaw`
+2. Fallback: `@randromeda/openclaw-arbiter`
+
+Install from npm:
+
+```bash
+openclaw plugins install @arbiter/openclaw
+```
+
+or fallback:
+
+```bash
+openclaw plugins install @randromeda/openclaw-arbiter
+```
+
+Install from local path:
+
+```bash
+openclaw plugins install ./integrations/openclaw-plugin
+```
+
+## Config
+
+Add plugin config under `plugins.entries.arbiter-openclaw.config` in your OpenClaw config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "arbiter-openclaw": {
+        "enabled": true,
+        "config": {
+          "arbiterUrl": "http://localhost:8080",
+          "tenantId": "tenant-demo",
+          "gatewayKey": "gw-key",
+          "serviceKey": "svc-key",
+          "protectTools": ["exec", "process", "write", "edit", "apply_patch"],
+          "recordState": true,
+          "failClosed": true
+        }
+      }
+    }
+  }
+}
+```
+
+Config options:
+
+- `arbiterUrl`: Arbiter base URL.
+- `tenantId`: Tenant ID for canonical requests and state records.
+- `gatewayKey`: Optional key for intercept routes.
+- `serviceKey`: Optional key for verify/state routes.
+- `actorIdMode`: `agent-id` (default) or `config`.
+- `actorId`: Required only when `actorIdMode=config`.
+- `protectTools`: Tool names guarded by Arbiter.
+- `recordState`: Record outcomes to `/v1/state/actions` (default `true`).
+- `failClosed`: Block on Arbiter errors (default `true`).
+- `timeoutMs`: Per-request timeout (default `5000`).
+
+## Stock OpenClaw Tool Mapping
+
+The default protected tools are:
+
+- `exec`
+- `process`
+- `write`
+- `edit`
+- `apply_patch`
+
+Use Arbiter policy to allow or deny these tools. The included Arbiter filesystem policy denies destructive delete commands and `apply_patch` file-deletion directives.
+
+## Development
+
+Run plugin tests:
+
+```bash
+cd integrations/openclaw-plugin
+npm test
+```
+
+Verify package metadata:
+
+```bash
+cd integrations/openclaw-plugin
+npm run pack:check
+```

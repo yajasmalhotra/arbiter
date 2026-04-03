@@ -148,3 +148,65 @@ test_openclaw_delete_file_denied if {
 	not result.allow
 	result.reason == "tool policy denied"
 }
+
+test_openclaw_stock_read_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-10"
+		},
+		"tool_name": "read",
+		"parameters": {
+			"path": "/tmp/notes.txt"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
+test_openclaw_stock_exec_list_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-11"
+		},
+		"tool_name": "exec",
+		"parameters": {
+			"command": "ls -la /tmp"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
+test_openclaw_stock_edit_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-12"
+		},
+		"tool_name": "edit",
+		"parameters": {
+			"path": "/tmp/notes.txt",
+			"find": "hello",
+			"replace": "hello world"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
+test_openclaw_apply_patch_non_delete_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-13"
+		},
+		"tool_name": "apply_patch",
+		"parameters": {
+			"patch": "*** Begin Patch\n*** Update File: notes.txt\n@@\n-hello\n+hello world\n*** End Patch\n"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
