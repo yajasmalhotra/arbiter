@@ -79,3 +79,109 @@ test_required_context_without_history_denied if {
 	not result.allow
 	result.required_context_missing
 }
+
+test_shell_rm_rf_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-6"
+		},
+		"tool_name": "run_shell_command",
+		"parameters": {
+			"command": "rm -rf /tmp/cache"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_shell_argv_delete_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-7"
+		},
+		"tool_name": "execute_command",
+		"parameters": {
+			"argv": ["rm", "-rf", "/tmp/cache"]
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_shell_find_delete_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-8"
+		},
+		"tool_name": "bash",
+		"parameters": {
+			"cmd": "find /tmp -name '*.tmp' -delete"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_delete_directory_tool_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-9"
+		},
+		"tool_name": "delete_directory",
+		"parameters": {
+			"path": "/tmp/cache",
+			"recursive": true
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_stock_exec_rm_rf_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-10"
+		},
+		"tool_name": "exec",
+		"parameters": {
+			"command": "rm -rf /tmp/cache"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_stock_process_rm_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-11"
+		},
+		"tool_name": "process",
+		"parameters": {
+			"command": ["rm", "-rf", "/tmp/cache"]
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_apply_patch_delete_file_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-12"
+		},
+		"tool_name": "apply_patch",
+		"parameters": {
+			"patch": "*** Begin Patch\n*** Delete File: secret.txt\n*** End Patch\n"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}

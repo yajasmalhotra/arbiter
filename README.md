@@ -27,6 +27,7 @@ This gives you a clear control point for actions like SQL, Slack, payments, file
 ## What Arbiter Does
 
 - Deterministic policy enforcement with OPA and Rego.
+- Example policy packs for SQL, Slack, Stripe, and OpenClaw-style filesystem and shell guardrails.
 - Signed allow tokens bound to request hash, tenant, actor, tool, and policy version.
 - Replay protection so one approval cannot be reused.
 - Provider normalization for OpenAI, Anthropic, LangChain-style, and generic framework envelopes.
@@ -133,6 +134,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 | Control plane | Supported | policy, bundle, approval, token, and signing-key workflows |
 | Signed OPA bundle distribution | Supported | service-token auth plus bundle signatures |
 | Python integration wrappers | Supported | LiteLLM and OpenClaw/generic wrappers |
+| OpenClaw native plugin | Supported (alpha) | `integrations/openclaw-plugin` (`before_tool_call` + verify + state record) |
 | Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
 ## Deployment Stages
@@ -155,13 +157,14 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 ## Current Limits
 
 - The project is still alpha.
-- Python is the only first-class integration package today.
+- OpenClaw native plugin support is alpha and currently optimized for stock filesystem/process tools.
 - Control-plane multi-tenant governance still needs more hardening before calling it broadly enterprise-ready.
 - Arbiter should be paired with real executor isolation and least-privilege credentials. It is one layer in a defense-in-depth design, not the whole system.
 
 ## Docs By Use Case
 
 - Quick evaluation with a real model: [examples/litellm-harness/README.md](examples/litellm-harness/README.md)
+- OpenClaw native plugin setup: [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md)
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
 - Integration package overview: [integrations/README.md](integrations/README.md)
 - Control plane workflows and APIs: [apps/control-plane/README.md](apps/control-plane/README.md)

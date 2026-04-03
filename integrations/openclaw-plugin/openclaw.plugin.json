@@ -1,0 +1,110 @@
+{
+  "id": "arbiter-openclaw",
+  "name": "Arbiter Guardrails",
+  "description": "Enforce Arbiter policy decisions for OpenClaw tool calls before execution.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "arbiterUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://"
+      },
+      "tenantId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "gatewayKey": {
+        "type": "string"
+      },
+      "serviceKey": {
+        "type": "string"
+      },
+      "actorIdMode": {
+        "type": "string",
+        "enum": [
+          "agent-id",
+          "config"
+        ],
+        "default": "agent-id"
+      },
+      "actorId": {
+        "type": "string"
+      },
+      "protectTools": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default": [
+          "exec",
+          "process",
+          "write",
+          "edit",
+          "apply_patch"
+        ]
+      },
+      "recordState": {
+        "type": "boolean",
+        "default": true
+      },
+      "failClosed": {
+        "type": "boolean",
+        "default": true
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "maximum": 60000,
+        "default": 5000
+      }
+    }
+  },
+  "uiHints": {
+    "arbiterUrl": {
+      "label": "Arbiter Base URL",
+      "help": "Base URL for the Arbiter interceptor, for example http://localhost:8080."
+    },
+    "tenantId": {
+      "label": "Tenant ID",
+      "help": "Tenant identifier included in canonical requests and state records."
+    },
+    "gatewayKey": {
+      "label": "Gateway Shared Key",
+      "help": "Optional key for /v1/intercept routes when Arbiter gateway auth is enabled.",
+      "sensitive": true
+    },
+    "serviceKey": {
+      "label": "Service Shared Key",
+      "help": "Optional key for /v1/execute/verify and /v1/state/actions routes.",
+      "sensitive": true
+    },
+    "actorIdMode": {
+      "label": "Actor ID Source",
+      "help": "Use OpenClaw agent ID by default or force a fixed actor ID from plugin config."
+    },
+    "actorId": {
+      "label": "Fixed Actor ID",
+      "help": "Used only when actorIdMode is config."
+    },
+    "protectTools": {
+      "label": "Protected Tool Names",
+      "help": "Only tools in this list are intercepted by Arbiter."
+    },
+    "recordState": {
+      "label": "Record Action State",
+      "help": "When enabled, sends /v1/state/actions after guarded tool calls."
+    },
+    "failClosed": {
+      "label": "Fail Closed",
+      "help": "Block protected tool calls when Arbiter is unavailable or responses are invalid."
+    },
+    "timeoutMs": {
+      "label": "HTTP Timeout (ms)",
+      "help": "Per-request timeout for Arbiter intercept, verify, and state calls.",
+      "advanced": true
+    }
+  }
+}

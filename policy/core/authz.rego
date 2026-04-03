@@ -26,6 +26,10 @@ domain_allow if {
 	data.arbiter.domain.stripe.allow with input as input
 }
 
+domain_allow if {
+	data.arbiter.domain.filesystem.allow with input as input
+}
+
 allow if {
 	known_tool
 	not required_context_missing

@@ -193,7 +193,7 @@ Use these helpers when bundle identity needs to remain consistent across control
 This directory contains the Rego policy system and bundle metadata.
 
 - `policy/core/authz.rego` is the system-wide policy gate.
-- `policy/domain/sql.rego`, `slack.rego`, and `stripe.rego` are current tool-specific allow rules.
+- `policy/domain/sql.rego`, `slack.rego`, `stripe.rego`, and `filesystem.rego` are current tool-specific allow rules.
 - `policy/data/config.json` holds the data used by policy.
 - `policy/arbiter.json` defines the tool registry and bundle metadata that OPA expects.
 - `policy/tests/` contains normal, regression, and adversarial fixtures.
@@ -250,6 +250,17 @@ This is the first-class Python integration package.
 - `pyproject.toml`, `CHANGELOG.md`, and `SEMVER.md` define packaging and release behavior.
 
 Use this package when users want a small client-side wrapper instead of writing raw HTTP calls.
+
+### `integrations/openclaw-plugin/`
+
+This is the native OpenClaw plugin package for in-process hook enforcement.
+
+- `index.js` registers `before_tool_call` and `after_tool_call` hooks via OpenClaw plugin SDK entrypoints.
+- `src/guardrail.js` executes intercept + verify before protected tool execution and records post-call outcomes.
+- `openclaw.plugin.json` defines plugin id, schema, and UI hints for OpenClaw config validation.
+- `README.md`, `CHANGELOG.md`, and `SEMVER.md` define install and release behavior.
+
+Use this package as the default OpenClaw integration path for hobbyist and pilot setups.
 
 ### `examples/litellm-harness/`
 
@@ -318,6 +329,7 @@ Update these files when request/response shapes change.
 - Run `opa test` against `policy/core`, `policy/domain`, `policy/tests`, and `policy/data`.
 - Run `npm run build` in `apps/control-plane` after control-plane changes.
 - Run `python3 -m unittest discover integrations/python/tests -v` for Python packaging changes.
+- Run `npm test` in `integrations/openclaw-plugin` for native OpenClaw plugin changes.
 - Run `python3 tools/pilot/soak_runner.py` for pilot readiness checks.
 - Run `./tools/ci/opa_bundle_smoke.sh` when Docker is available to validate control-plane bundle serving and OPA bundle activation.
 
