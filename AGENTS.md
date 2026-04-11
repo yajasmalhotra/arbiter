@@ -319,6 +319,7 @@ This directory contains release automation helpers for runtime distribution.
 
 - `build_arbiter_artifacts.sh` builds versioned `arbiter` archives for macOS/Linux amd64+arm64 and writes `dist/checksums.txt`.
 - `render_homebrew_formula.sh` renders a Homebrew `Formula/arbiter.rb` from release checksums and GitHub release URLs.
+- Root `install.sh` is the curl-first installer that downloads the appropriate release artifact and verifies checksums before install.
 
 ### `.github/workflows/ci.yml`
 

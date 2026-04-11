@@ -66,6 +66,7 @@ The key design choice is that the control plane stays off the hot path. Enforcem
 Install options:
 
 - Source run: `go run ./cmd/arbiter local ...` (available now in-repo)
+- Curl install script: `curl -fsSL https://raw.githubusercontent.com/yajasmalhotra/arbiter/master/install.sh | sh`
 - Homebrew (after formula publish): `brew tap yajasmalhotra/homebrew-tap && brew install arbiter`
 
 ### 1. Initialize local runtime config
