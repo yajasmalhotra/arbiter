@@ -78,23 +78,38 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build-and-release
-    if: (github.event_name != 'workflow_dispatch' || github.event.inputs.update_homebrew == 'true') && secrets.HOMEBREW_TAP_TOKEN != ''
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.update_homebrew == 'true'
     permissions:
       contents: read
     env:
       HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
       SOURCE_REPO: ${{ github.repository }}
     steps:
+      - name: Check tap token
+        id: tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping Homebrew update."
+          else
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Checkout
+        if: steps.tap.outputs.enabled == 'true'
         uses: actions/checkout@v4
 
       - name: Download release artifacts
+        if: steps.tap.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: arbiter-release-dist
           path: dist
 
       - name: Render Homebrew formula
+        if: steps.tap.outputs.enabled == 'true'
         run: |
           mkdir -p output
           ./tools/release/render_homebrew_formula.sh \
@@ -104,6 +119,7 @@ jobs:
             "output/arbiter.rb"
 
       - name: Update tap formula
+        if: steps.tap.outputs.enabled == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
