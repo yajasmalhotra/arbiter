@@ -19,6 +19,7 @@ On each run:
 3. Publishes GitHub Release assets:
    - `arbiter_<version>_<os>_<arch>.tar.gz`
    - `checksums.txt`
+   - `install.sh`
 4. Optionally updates `Formula/arbiter.rb` in a Homebrew tap repository.
 
 ## Required Configuration
@@ -47,3 +48,16 @@ Render formula:
   /tmp/arbiter.rb
 ```
 
+## Curl-First Install
+
+Users can install without Homebrew via:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yajasmalhotra/arbiter/master/install.sh | sh
+```
+
+Pinning a version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yajasmalhotra/arbiter/master/install.sh | ARBITER_VERSION=0.2.0 sh
+```

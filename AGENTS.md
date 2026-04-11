@@ -319,6 +319,7 @@ This directory contains release automation helpers for runtime distribution.
 
 - `build_arbiter_artifacts.sh` builds versioned `arbiter` archives for macOS/Linux amd64+arm64 and writes `dist/checksums.txt`.
 - `render_homebrew_formula.sh` renders a Homebrew `Formula/arbiter.rb` from release checksums and GitHub release URLs.
+- Root `install.sh` is the curl-first installer that downloads the appropriate release artifact and verifies checksums before install.
 
 ### `.github/workflows/ci.yml`
 
@@ -379,11 +380,8 @@ Update these files when request/response shapes change.
 - Use `context.Context` consistently for cancellation and deadlines.
 - Reject unknown or ambiguous payloads unless they normalize safely.
 - Version policy and data artifacts so every decision is traceable.
-<<<<<<< Updated upstream
 - Always switch back to `master` before checking out or creating a new branch.
-=======
 - Any change to an npm package must include a `package.json` version bump (`patch`, `minor`, or `major`) appropriate to the impact.
->>>>>>> Stashed changes
 - When adding a new service or package, update `README.md` if the public setup or architecture changes.
 - When adding or changing a service boundary, update this file.
 - Keep examples aligned with `schema.CurrentSchemaVersion`.
