@@ -171,6 +171,52 @@ test_stock_process_rm_denied if {
 	result.reason == "tool policy denied"
 }
 
+test_stock_exec_canary_path_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-11b"
+		},
+		"tool_name": "exec",
+		"parameters": {
+			"command": "mkdir -p /tmp/arbiter-deny-test/nested"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_stock_process_canary_path_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-11c"
+		},
+		"tool_name": "process",
+		"parameters": {
+			"command": ["mkdir", "-p", "/tmp/arbiter-deny-test/nested"]
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_write_canary_path_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-11d"
+		},
+		"tool_name": "write",
+		"parameters": {
+			"path": "/tmp/arbiter-deny-test/canary.txt",
+			"content": "hello"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
 test_apply_patch_delete_file_denied if {
 	result := authz.decision with input as {
 		"metadata": {
@@ -179,6 +225,21 @@ test_apply_patch_delete_file_denied if {
 		"tool_name": "apply_patch",
 		"parameters": {
 			"patch": "*** Begin Patch\n*** Delete File: secret.txt\n*** End Patch\n"
+		}
+	}
+
+	not result.allow
+	result.reason == "tool policy denied"
+}
+
+test_apply_patch_canary_path_denied if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "adv-13"
+		},
+		"tool_name": "apply_patch",
+		"parameters": {
+			"patch": "*** Begin Patch\n*** Add File: /tmp/arbiter-deny-test/canary.txt\n+hello\n*** End Patch\n"
 		}
 	}
 

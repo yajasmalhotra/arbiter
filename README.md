@@ -203,6 +203,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 
 ## Docs By Use Case
 
+- Safe OpenClaw guardrail smoke test: prompt OpenClaw to create `/tmp/arbiter-deny-test/...` with `exec` or `process`; the default filesystem policy blocks that canary prefix without requiring a destructive command.
 - Quick evaluation with a real model: [examples/litellm-harness/README.md](examples/litellm-harness/README.md)
 - OpenClaw native plugin setup: [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md)
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)

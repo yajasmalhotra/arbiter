@@ -2,6 +2,10 @@
 
 All notable changes to `@randromeda/arbiter-openclaw` will be documented in this file.
 
+## [0.1.2] - 2026-04-11
+
+- Documented the safe canary-path smoke test for OpenClaw using `/tmp/arbiter-deny-test`.
+
 ## [0.1.1] - 2026-04-03
 
 - Added local runtime auto-discovery from `~/.arbiter/config.json`.

@@ -76,6 +76,11 @@
           "security"
         ]
       },
+      "filesystem": {
+        "blocked_test_path_prefixes": [
+          "/tmp/arbiter-deny-test"
+        ]
+      },
       "stripe": {
         "max_refund_cents": 500000
       }

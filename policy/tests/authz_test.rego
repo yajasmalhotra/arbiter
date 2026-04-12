@@ -179,6 +179,21 @@ test_openclaw_stock_exec_list_allowed if {
 	result.reason == "allowed"
 }
 
+test_openclaw_stock_exec_mkdir_outside_canary_allowed if {
+	result := authz.decision with input as {
+		"metadata": {
+			"request_id": "req-11b"
+		},
+		"tool_name": "exec",
+		"parameters": {
+			"command": "mkdir -p /tmp/arbiter-allow-test"
+		}
+	}
+
+	result.allow
+	result.reason == "allowed"
+}
+
 test_openclaw_stock_edit_allowed if {
 	result := authz.decision with input as {
 		"metadata": {

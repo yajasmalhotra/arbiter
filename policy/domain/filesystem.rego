@@ -23,16 +23,19 @@ allow if {
 allow if {
 	shell_tool
 	not shell_delete_requested
+	not blocked_test_target_requested
 }
 
 allow if {
 	mutating_text_tool
 	not explicit_delete_request
+	not blocked_test_target_requested
 }
 
 allow if {
 	input.tool_name == "apply_patch"
 	not patch_delete_requested
+	not blocked_test_target_requested
 }
 
 shell_tool if {
@@ -115,6 +118,50 @@ shell_delete_requested if {
 	destructive_shell_verb(lower(first))
 }
 
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "command", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_array_references_path(object.get(input.parameters, "command", []))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "cmd", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_array_references_path(object.get(input.parameters, "args", []))
+}
+
+blocked_test_target_requested if {
+	blocked_test_array_references_path(object.get(input.parameters, "argv", []))
+}
+
+blocked_test_target_requested if {
+	blocked_test_array_references_path(object.get(input.parameters, "arguments", []))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "path", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "file", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "target", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "destination", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "patch", ""))
+}
+
 patch_delete_requested if {
 	patch := object.get(input.parameters, "patch", "")
 	is_string(patch)
@@ -186,4 +233,18 @@ destructive_shell_verb(verb) if {
 
 destructive_shell_verb(verb) if {
 	verb == "shred"
+}
+
+blocked_test_string_references_path(value) if {
+	is_string(value)
+	prefix := object.get(object.get(data.arbiter.domain_config, "filesystem", {}), "blocked_test_path_prefixes", [])[_]
+	prefix != ""
+	contains(lower(value), lower(prefix))
+}
+
+blocked_test_array_references_path(value) if {
+	is_array(value)
+	entry := value[_]
+	is_string(entry)
+	blocked_test_string_references_path(entry)
 }

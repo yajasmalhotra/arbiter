@@ -103,6 +103,8 @@ The default protected tools are:
 
 Use Arbiter policy to allow or deny these tools. The included Arbiter filesystem policy denies destructive delete commands and `apply_patch` file-deletion directives.
 
+For a safer OpenClaw smoke test, the default policy also denies writes and shell commands that target the canary prefix `/tmp/arbiter-deny-test`. A normal chat prompt such as `Use the exec tool exactly once to run: mkdir -p /tmp/arbiter-deny-test/nested` should trigger an Arbiter block without relying on `rm -rf`.
+
 ## Development
 
 Run plugin tests:
