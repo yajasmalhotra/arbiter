@@ -99,6 +99,47 @@ curl -s -X POST http://127.0.0.1:8080/v1/intercept/openai \
   -d @api/examples/openai-intercept-request.json
 ```
 
+## OpenClaw Quickstart
+
+If you already have OpenClaw installed, you can validate the native Arbiter plugin from the chat interface in a few minutes.
+
+### 1. Install the plugin
+
+```bash
+openclaw plugins install @randromeda/arbiter-openclaw
+```
+
+### 2. Start Arbiter locally
+
+```bash
+go run ./cmd/arbiter local init
+go run ./cmd/arbiter local start
+```
+
+### 3. Open the OpenClaw chat UI
+
+```bash
+openclaw dashboard
+```
+
+### 4. Send a safe guardrail smoke-test prompt
+
+Use this exact chat prompt:
+
+```text
+Use the exec tool exactly once to run this exact command and nothing else: mkdir -p /tmp/arbiter-deny-test/nested. If the tool is blocked, report the block reason. Do not retry with another tool and do not choose an alternative path.
+```
+
+Expected result: OpenClaw reports that the tool call was blocked by Arbiter policy, and `/tmp/arbiter-deny-test` is not created.
+
+### 5. Verify the path was not created
+
+```bash
+test -d /tmp/arbiter-deny-test && echo EXISTS || echo ABSENT
+```
+
+For full plugin setup, config options, and additional OpenClaw examples, see [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md).
+
 ## Five-Minute Demo
 
 ### 1. Start the local stack
