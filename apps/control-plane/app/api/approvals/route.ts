@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../lib/auth";
 import { listApprovalRequests } from "../../../lib/store";
 import type { ApprovalState } from "../../../lib/types";
 
 export async function GET(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "viewer");
+  const unauthorized = await requireControlPlaneRole(request, "viewer");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const rawState = request.nextUrl.searchParams.get("state")?.trim().toLowerCase() ?? "";
   const state =

@@ -2,10 +2,16 @@ import { notFound } from "next/navigation";
 
 import { PolicyDetailClient } from "@/components/policy-detail-client";
 import { getPolicy } from "@/lib/store";
+import { establishControlPlanePageContext } from "@/lib/server-identity";
+import { runWithControlPlaneRequestContext } from "@/lib/context";
 
 export default async function PolicyPage({ params }: { params: Promise<{ id: string }> }) {
+  const context = await establishControlPlanePageContext();
+  if (!context) {
+    notFound();
+  }
   const { id } = await params;
-  const policy = await getPolicy(id);
+  const policy = await runWithControlPlaneRequestContext(context, () => getPolicy(id));
   if (!policy) {
     notFound();
   }
@@ -18,10 +24,4 @@ export default async function PolicyPage({ params }: { params: Promise<{ id: str
   );
 }
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const policy = await getPolicy(id);
-  return {
-    title: policy ? `${policy.name} · Arbiter Control Plane` : "Policy · Arbiter Control Plane"
-  };
-}
+export const metadata = { title: "Policy · Arbiter Control Plane" };

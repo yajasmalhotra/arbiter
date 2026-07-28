@@ -6,6 +6,8 @@ import {
   CONTROL_PLANE_ROLE_HEADER,
   CONTROL_PLANE_TENANT_HEADER
 } from "./control-plane-headers";
+import { authenticateControlPlaneIdentity, controlPlaneIdentityEnabled } from "./control-plane-identity";
+import { clearControlPlaneRequestContext, currentControlPlaneRequestContext, setControlPlaneRequestContext, type ControlPlaneRequestContext } from "./context";
 
 export { CONTROL_PLANE_AUTH_HEADER, CONTROL_PLANE_TENANT_HEADER, CONTROL_PLANE_ROLE_HEADER };
 
@@ -17,6 +19,8 @@ const ROLE_WEIGHT: Record<ControlPlaneRole, number> = {
   approver: 30,
   admin: 40
 };
+const authenticatedContexts = new WeakMap<NextRequest, ControlPlaneRequestContext>();
+const bundleServiceContexts = new WeakMap<NextRequest, ControlPlaneRequestContext>();
 
 function parseBool(raw: string | undefined): boolean {
   if (!raw) {
@@ -42,6 +46,10 @@ function normalizeRole(raw: string | undefined): ControlPlaneRole | undefined {
 }
 
 function currentRole(request: NextRequest): ControlPlaneRole | undefined {
+  const trustedRoles = authenticatedContexts.get(request)?.roles ?? currentControlPlaneRequestContext()?.roles;
+  if (trustedRoles?.length) {
+    return trustedRoles.reduce<ControlPlaneRole>((highest, role) => ROLE_WEIGHT[role as ControlPlaneRole] > ROLE_WEIGHT[highest] ? role as ControlPlaneRole : highest, "viewer");
+  }
   return normalizeRole(
     request.headers.get(CONTROL_PLANE_ROLE_HEADER) ??
       process.env.ARBITER_CONTROL_PLANE_DEFAULT_ROLE ??
@@ -49,7 +57,22 @@ function currentRole(request: NextRequest): ControlPlaneRole | undefined {
   );
 }
 
-export function requireControlPlaneAuth(request: NextRequest): NextResponse | undefined {
+export async function requireControlPlaneAuth(request: NextRequest): Promise<NextResponse | undefined> {
+  clearControlPlaneRequestContext();
+  if (controlPlaneIdentityEnabled()) {
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+    const identity = await authenticateControlPlaneIdentity(token);
+    if (!identity) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    authenticatedContexts.set(request, { tenantId: identity.tenantId, actor: identity.subject, roles: identity.roles });
+    return requireControlPlaneTenant(request);
+  }
+
+  if (rbacEnabled() && !(process.env.CONTROL_PLANE_API_KEY ?? "").trim()) {
+    return NextResponse.json({ error: "RBAC requires signed identity or CONTROL_PLANE_API_KEY" }, { status: 503 });
+  }
   const expected = process.env.CONTROL_PLANE_API_KEY?.trim();
   if (!expected) {
     return requireControlPlaneTenant(request);
@@ -62,6 +85,18 @@ export function requireControlPlaneAuth(request: NextRequest): NextResponse | un
 }
 
 export function requireControlPlaneTenant(request: NextRequest): NextResponse | undefined {
+  const trustedTenant = authenticatedContexts.get(request)?.tenantId ?? currentControlPlaneRequestContext()?.tenantId;
+  if (trustedTenant) {
+    const supplied = request.headers.get(CONTROL_PLANE_TENANT_HEADER)?.trim();
+    if (supplied && supplied !== trustedTenant) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+    const allowedTenant = process.env.ARBITER_TENANT_ID?.trim();
+    if (allowedTenant && allowedTenant !== trustedTenant) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+    return undefined;
+  }
   const expectedTenant = process.env.ARBITER_TENANT_ID?.trim();
   if (!expectedTenant) {
     return undefined;
@@ -79,16 +114,26 @@ export function requireControlPlaneTenant(request: NextRequest): NextResponse | 
   return undefined;
 }
 
-export function requireControlPlaneRole(
+// Authentication may await an OIDC JWKS fetch, so its AsyncLocalStorage scope
+// cannot safely escape into the caller. Routes adopt this already-verified
+// context in their own async continuation before accessing the store.
+export function adoptControlPlaneRequestContext(request: NextRequest): void {
+  const context = authenticatedContexts.get(request) ?? bundleServiceContexts.get(request);
+  if (context) {
+    setControlPlaneRequestContext(context);
+  }
+}
+
+export async function requireControlPlaneRole(
   request: NextRequest,
   minimumRole: ControlPlaneRole
-): NextResponse | undefined {
-  const unauthorized = requireControlPlaneAuth(request);
+): Promise<NextResponse | undefined> {
+  const unauthorized = await requireControlPlaneAuth(request);
   if (unauthorized) {
     return unauthorized;
   }
 
-  if (!rbacEnabled()) {
+  if (!rbacEnabled() && !controlPlaneIdentityEnabled()) {
     return undefined;
   }
 
@@ -125,6 +170,7 @@ export async function requireBundleServiceAuth(
   if (!validated) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  bundleServiceContexts.set(request, { tenantId: validated.tenantId, actor: `service-token:${validated.id}`, roles: [] });
 
   return undefined;
 }

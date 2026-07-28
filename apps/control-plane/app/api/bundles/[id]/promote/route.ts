@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../../../lib/auth";
 import { createApprovalRequest, promoteBundle } from "../../../../../lib/store";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -12,10 +12,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     body = {};
   }
   const channel = body.channel ?? "prod";
-  const unauthorized = requireControlPlaneRole(request, "editor");
+  const unauthorized = await requireControlPlaneRole(request, "editor");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   try {
     if (channel === "prod") {

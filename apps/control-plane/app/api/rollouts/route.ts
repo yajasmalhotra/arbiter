@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../lib/auth";
 import { listPolicies, setRolloutState } from "../../../lib/store";
 import type { RolloutState } from "../../../lib/types";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireControlPlaneRole(request, "viewer");
+  if (unauthorized) return unauthorized;
+  adoptControlPlaneRequestContext(request);
   const policies = await listPolicies();
   return NextResponse.json({
     rollouts: policies.map((policy) => ({
@@ -17,10 +20,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "editor");
+  const unauthorized = await requireControlPlaneRole(request, "editor");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const body = await request.json();
   if (!body.policyId || !body.rolloutState) {

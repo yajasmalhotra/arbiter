@@ -30,6 +30,7 @@ export function ControlPlaneConnectionSettings({
   description = "Optional headers for secured deployments. Saved only in this browser."
 }: Props) {
   const [controlKey, setControlKey] = useState("");
+  const [identityToken, setIdentityToken] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [role, setRole] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -37,18 +38,20 @@ export function ControlPlaneConnectionSettings({
   useEffect(() => {
     const saved = loadControlPlaneClientConfig();
     setControlKey(saved.controlKey);
+    setIdentityToken(saved.identityToken);
     setTenantId(saved.tenantId);
     setRole(saved.role);
   }, []);
 
   function handleSave() {
-    saveControlPlaneClientConfig({ controlKey, tenantId, role });
+    saveControlPlaneClientConfig({ controlKey, identityToken, tenantId, role });
     setStatus("Saved. New requests will include these headers.");
   }
 
   function handleClear() {
     clearControlPlaneClientConfig();
     setControlKey("");
+    setIdentityToken("");
     setTenantId("");
     setRole("");
     setStatus("Cleared.");
@@ -71,9 +74,19 @@ export function ControlPlaneConnectionSettings({
             onChange={(e) => setControlKey(e.target.value)}
           />
         </div>
+        <div className="grid gap-2">
+          <Label htmlFor="cp-identity-token">Signed identity token (optional)</Label>
+          <Input
+            id="cp-identity-token"
+            type="password"
+            placeholder="Bearer token for enterprise access"
+            value={identityToken}
+            onChange={(e) => setIdentityToken(e.target.value)}
+          />
+        </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="grid gap-2">
-            <Label htmlFor="cp-tenant">Tenant ID (optional)</Label>
+            <Label htmlFor="cp-tenant">Tenant ID (legacy header mode)</Label>
             <Input
               id="cp-tenant"
               placeholder="default"
@@ -82,7 +95,7 @@ export function ControlPlaneConnectionSettings({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="cp-role">Role (optional)</Label>
+            <Label htmlFor="cp-role">Role (legacy header mode)</Label>
             <select id="cp-role" className={selectClass} value={role} onChange={(e) => setRole(e.target.value)}>
               {ROLE_OPTIONS.map((option) => (
                 <option key={option} value={option}>
@@ -105,4 +118,3 @@ export function ControlPlaneConnectionSettings({
     </Card>
   );
 }
-

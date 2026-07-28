@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../../../lib/auth";
 import { activateSigningKey } from "../../../../../lib/store";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const { id } = await params;
   let body: { actor?: string };

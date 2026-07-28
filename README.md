@@ -329,6 +329,10 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Decisions are traceable by decision ID, policy version, data revision, request ID, and trace ID.
 - Production bundle promotion and rollback can be approval-gated in the control plane.
 - The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
+- The control plane supports signed, tenant-scoped operator identities with
+  role claims; those trusted claims override browser-controlled tenant and role
+  headers for multi-tenant governance. It can validate RS256 tokens directly
+  against an enterprise OIDC JWKS or use an internal gateway-issued HS256 token.
 
 ## Current Limits
 

@@ -74,6 +74,36 @@ If `ARBITER_CONTROL_PLANE_ENFORCE_RBAC=true`, role-scoped mutation checks are en
 - `editor` can publish bundles, update policies, change rollout state, and create prod approval requests.
 - `approver` is required to approve/reject prod rollout requests, plus policy delete, service-token operations, and signing-key operations.
 
+### Enterprise signed identity
+
+For direct enterprise OIDC, set `ARBITER_CONTROL_PLANE_OIDC_JWKS_URL`,
+`ARBITER_CONTROL_PLANE_OIDC_ISSUER`, and
+`ARBITER_CONTROL_PLANE_OIDC_AUDIENCE` (default `arbiter-control-plane`).
+Arbiter validates short-lived RS256 bearer tokens against a bounded, cached
+JWKS; configure `ARBITER_CONTROL_PLANE_OIDC_JWKS_CACHE_TTL_MS` to adjust the
+five-minute default cache. Alternatively, set `ARBITER_CONTROL_PLANE_JWT_SECRET`
+when an identity-aware gateway issues internal short-lived HS256 tokens. The
+HS256 mode accepts optional `ARBITER_CONTROL_PLANE_JWT_ISSUER` and
+`ARBITER_CONTROL_PLANE_JWT_AUDIENCE` settings.
+
+Both modes require `sub`, `tenant_id`, non-empty `roles`, and `exp` claims;
+`roles` may be an array or comma-separated string using `viewer`, `editor`,
+`approver`, or `admin`.
+
+Signed identity takes precedence over every client-controlled tenant and role
+header. The authenticated tenant and subject become the request-scoped store
+tenant and audit actor, so concurrent tenants cannot select each other's
+control-plane records through a request body or browser setting. In this mode,
+RBAC is enforced even if `ARBITER_CONTROL_PLANE_ENFORCE_RBAC` is unset. Do not
+put the signing secret in a browser; the dashboard accepts the already-issued
+bearer token in Connection Settings and stores the token in a same-site cookie
+so server-rendered pages can establish the same tenant context. Header RBAC remains for development and
+requires `CONTROL_PLANE_API_KEY` when enabled.
+
+Bundle service tokens are also tenant-bound: the OPA artifact and manifest
+routes derive the store tenant from the validated token hash rather than a
+request header or process-default tenant.
+
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.

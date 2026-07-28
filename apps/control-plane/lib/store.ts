@@ -7,7 +7,7 @@ import { gzip as gzipCallback } from "node:zlib";
 import { Pool, PoolClient } from "pg";
 import tar from "tar-stream";
 
-import { defaultActor, defaultTenantId } from "./context";
+import { currentControlPlaneRequestContext, defaultActor, defaultTenantId } from "./context";
 import { dbEnabled, ensureMigrations, getPool } from "./db";
 import * as legacy from "./store_legacy";
 import type {
@@ -30,6 +30,12 @@ const gzip = promisify(gzipCallback);
 const CHANNELS = new Set(["dev", "staging", "prod"]);
 
 type BundleChannel = "dev" | "staging" | "prod";
+
+// Request-local signed identity always wins over a caller-supplied actor. The
+// optional input remains for trusted server-side and legacy callers only.
+function authoritativeActor(candidate?: string): string {
+  return currentControlPlaneRequestContext()?.actor ?? (candidate?.trim() || defaultActor());
+}
 
 function policyFromRow(row: Record<string, unknown>): PolicyRecord {
   return {
@@ -229,6 +235,7 @@ type ValidatedServiceToken = {
   id: string;
   name: string;
   scopes: string[];
+  tenantId: string;
 };
 
 type BundleSigningConfig = {
@@ -412,12 +419,12 @@ export async function validateServiceToken(
       await ensureBootstrapServiceToken(db);
       const result = await db.query(
         `
-          SELECT id, name, scopes
+          SELECT id, name, tenant_id, scopes
           FROM service_tokens
-          WHERE tenant_id = $1 AND token_hash = $2 AND revoked_at IS NULL
+          WHERE token_hash = $1 AND revoked_at IS NULL
           LIMIT 1
         `,
-        [defaultTenantId(), tokenHash(candidate)]
+        [tokenHash(candidate)]
       );
       if (!result.rowCount) {
         return null;
@@ -436,6 +443,7 @@ export async function validateServiceToken(
       return {
         id: String(row.id),
         name: String(row.name),
+        tenantId: String(row.tenant_id),
         scopes
       };
     },
@@ -451,6 +459,7 @@ export async function validateServiceToken(
       return {
         id: "st_bootstrap",
         name: "bootstrap-bundle-reader",
+        tenantId: defaultTenantId(),
         scopes
       };
     }
@@ -531,7 +540,7 @@ export async function createServiceToken(
           name,
           tokenHash(token),
           JSON.stringify(normalizedScopes),
-          input.actor?.trim() || defaultActor(),
+          authoritativeActor(input.actor),
           now
         ]
       );
@@ -539,7 +548,7 @@ export async function createServiceToken(
         id,
         name,
         scopes: normalizedScopes,
-        createdBy: input.actor?.trim() || defaultActor(),
+        createdBy: authoritativeActor(input.actor),
         createdAt: now
       };
       return { token, record };
@@ -712,7 +721,7 @@ export async function createCapabilityGrant(input: CreateCapabilityGrantInput): 
         toolNames,
         maxAmountCents: input.maxAmountCents,
         mayDelegate: Boolean(input.mayDelegate),
-        createdBy: input.actor?.trim() || defaultActor(),
+        createdBy: authoritativeActor(input.actor),
         createdAt: now,
         expiresAt: expiresAt.toISOString()
       };
@@ -753,12 +762,12 @@ export async function revokeCapabilityGrant(id: string, actor?: string): Promise
         return undefined;
       }
       const record = capabilityGrantFromRow(result.rows[0] as Record<string, unknown>);
-      await appendAuditEvent({ action: "capability_grant_revoked", actor: actor?.trim() || defaultActor(), metadata: { capabilityGrantId: record.id, subject: record.subject } });
+      await appendAuditEvent({ action: "capability_grant_revoked", actor: authoritativeActor(actor), metadata: { capabilityGrantId: record.id, subject: record.subject } });
       const sync = await synchronizeCapabilityRevocation(record);
       if (sync.delivered || sync.failed) {
         await appendAuditEvent({
           action: sync.failed ? "capability_revocation_sync_partial" : "capability_revocation_synced",
-          actor: actor?.trim() || defaultActor(),
+          actor: authoritativeActor(actor),
           metadata: { capabilityGrantId: record.id, delivered: sync.delivered, failed: sync.failed }
         });
       }
@@ -827,7 +836,7 @@ export async function createSigningKey(input: CreateSigningKeyInput): Promise<Si
   const keyId = input.keyId?.trim() || `skid_${randomUUID()}`;
   const scope = input.scope?.trim() || "read";
   const activate = Boolean(input.activate);
-  const actor = input.actor?.trim() || defaultActor();
+  const actor = authoritativeActor(input.actor);
 
   return withDbOrFallback(
     async (db) => {
@@ -895,7 +904,7 @@ export async function activateSigningKey(
   if (!candidate) {
     throw new Error("signing key id is required");
   }
-  const actor = input.actor?.trim() || defaultActor();
+  const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
       await ensureBootstrapSigningKey(db);
@@ -975,7 +984,7 @@ export async function revokeSigningKey(
   if (!candidate) {
     throw new Error("signing key id is required");
   }
-  const actor = input.actor?.trim() || defaultActor();
+  const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
       await ensureBootstrapSigningKey(db);
@@ -1406,7 +1415,7 @@ export async function publishBundle(input: PublishBundleInput = {}): Promise<Bun
   return withDbOrFallback(
     async (db) => {
       const now = new Date().toISOString();
-      const actor = input.actor?.trim() || defaultActor();
+      const actor = authoritativeActor(input.actor);
       const tenant = defaultTenantId();
 
       const selectedPoliciesResult = input.policyIds?.length
@@ -1654,7 +1663,7 @@ export async function promoteBundle(
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = input.actor?.trim() || defaultActor();
+      const actor = authoritativeActor(input.actor);
 
       const client = await db.connect();
       let promoted: BundleArtifact | undefined;
@@ -1780,7 +1789,7 @@ export async function rollbackChannel(
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = input.actor?.trim() || defaultActor();
+      const actor = authoritativeActor(input.actor);
 
       const client = await db.connect();
       let restored: BundleArtifact | undefined;
@@ -1853,7 +1862,7 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = input.actor?.trim() || defaultActor();
+      const actor = authoritativeActor(input.actor);
       const notes = input.notes?.trim() || undefined;
       const now = new Date().toISOString();
       const client = await db.connect();
@@ -1950,7 +1959,7 @@ export async function approveApprovalRequest(
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = input.actor?.trim() || defaultActor();
+      const actor = authoritativeActor(input.actor);
       const reviewNotes = input.notes?.trim() || undefined;
       const now = new Date().toISOString();
       const client = await db.connect();

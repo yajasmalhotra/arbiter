@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireBundleServiceAuth } from "../../../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireBundleServiceAuth } from "../../../../../../lib/auth";
 import { getChannelArchive } from "../../../../../../lib/store";
 
 function normalizeETag(value: string): string {
@@ -22,6 +22,7 @@ export async function GET(
   if (authError) {
     return authError;
   }
+  adoptControlPlaneRequestContext(request);
 
   const { channel } = await params;
   if (channel !== "dev" && channel !== "staging" && channel !== "prod") {

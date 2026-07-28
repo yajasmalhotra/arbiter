@@ -5,18 +5,18 @@ import { PolicyRecordForm } from "@/components/policy-record-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getPolicy } from "@/lib/store";
+import { establishControlPlanePageContext } from "@/lib/server-identity";
+import { runWithControlPlaneRequestContext } from "@/lib/context";
 
-export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const policy = await getPolicy(id);
-  return {
-    title: policy ? `Edit · ${policy.name}` : "Edit policy · Arbiter Control Plane"
-  };
-}
+export const metadata = { title: "Edit policy · Arbiter Control Plane" };
 
 export default async function EditPolicyPage({ params }: { params: Promise<{ id: string }> }) {
+  const context = await establishControlPlanePageContext();
+  if (!context) {
+    notFound();
+  }
   const { id } = await params;
-  const policy = await getPolicy(id);
+  const policy = await runWithControlPlaneRequestContext(context, () => getPolicy(id));
   if (!policy) {
     notFound();
   }

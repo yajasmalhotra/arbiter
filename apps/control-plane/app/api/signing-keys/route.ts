@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../lib/auth";
 import { createSigningKey, listSigningKeys } from "../../../lib/store";
 
 export async function GET(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const signingKeys = await listSigningKeys();
   return NextResponse.json({ signingKeys });
 }
 
 export async function POST(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   let body: {
     name?: string;

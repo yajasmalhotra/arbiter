@@ -8,9 +8,27 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 import { listAuditEvents, listPolicies } from "@/lib/store";
 import { auditActionLabel, formatTimestamp, rolloutLabel } from "@/lib/presentation";
+import { establishControlPlanePageContext } from "@/lib/server-identity";
+import { runWithControlPlaneRequestContext } from "@/lib/context";
+
+// Signed identity is read from a same-site cookie at request time. Never
+// prerender this dashboard with a deployment-default tenant's records.
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [policies, auditEvents] = await Promise.all([listPolicies(), listAuditEvents()]);
+  const context = await establishControlPlanePageContext();
+  if (!context) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Sign in to the control plane</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Paste your short-lived signed identity token below, save it, then reload this page.</p>
+        </div>
+        <ControlPlaneConnectionSettings description="Signed identity is required by this deployment. The token is verified before tenant records are loaded." />
+      </div>
+    );
+  }
+  const [policies, auditEvents] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents()]));
   const byState = policies.reduce<Record<string, number>>((acc, policy) => {
     acc[policy.rolloutState] = (acc[policy.rolloutState] || 0) + 1;
     return acc;

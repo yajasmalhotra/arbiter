@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../../../../lib/auth";
 import { createApprovalRequest, rollbackChannel } from "../../../../../../lib/store";
 
 export async function POST(
@@ -18,10 +18,11 @@ export async function POST(
     body = {};
   }
 
-  const unauthorized = requireControlPlaneRole(request, "editor");
+  const unauthorized = await requireControlPlaneRole(request, "editor");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   try {
     if (channel === "prod") {

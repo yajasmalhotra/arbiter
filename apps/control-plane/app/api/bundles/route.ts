@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../lib/auth";
 import { listBundles, publishBundle } from "../../../lib/store";
 import type { RolloutState } from "../../../lib/types";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireControlPlaneRole(request, "viewer");
+  if (unauthorized) return unauthorized;
+  adoptControlPlaneRequestContext(request);
   const bundles = await listBundles();
   return NextResponse.json({ bundles });
 }
 
 export async function POST(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "editor");
+  const unauthorized = await requireControlPlaneRole(request, "editor");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   let body: {
     policyIds?: string[];

@@ -12,13 +12,27 @@ import {
   listServiceTokens,
   listSigningKeys
 } from "@/lib/store";
+import { establishControlPlanePageContext } from "@/lib/server-identity";
+import { runWithControlPlaneRequestContext } from "@/lib/context";
 
 export const metadata = {
   title: "Operations · Arbiter Control Plane"
 };
 
+// Operations data is tenant-scoped when enterprise signed identity is enabled.
+export const dynamic = "force-dynamic";
+
 export default async function OperationsPage() {
-  const [activeBundle, bundles, activations, serviceTokens, signingKeys, capabilityGrants, approvalRequests] = await Promise.all([
+  const context = await establishControlPlanePageContext();
+  if (!context) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Signed identity required</h1>
+        <ControlPlaneConnectionSettings description="Save a short-lived signed identity token, then reload to load tenant operations data." />
+      </div>
+    );
+  }
+  const [activeBundle, bundles, activations, serviceTokens, signingKeys, capabilityGrants, approvalRequests] = await runWithControlPlaneRequestContext(context, () => Promise.all([
     getActiveBundle(),
     listBundles(),
     listBundleActivations(),
@@ -26,7 +40,7 @@ export default async function OperationsPage() {
     listSigningKeys(),
     listCapabilityGrants(),
     listApprovalRequests()
-  ]);
+  ]));
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -43,7 +57,7 @@ export default async function OperationsPage() {
 
       <ControlPlaneConnectionSettings
         title="Secure deployment headers"
-        description="Set optional API key, tenant, and role headers for protected environments."
+        description="Set the signed identity token for tenant-scoped access, or legacy headers for development deployments."
       />
 
       <OperationsWorkbench

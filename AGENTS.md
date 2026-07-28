@@ -254,8 +254,8 @@ This is the governance UI and bundle distribution service.
 - `lib/db.ts` runs SQL migrations from `db/migrations` when `ARBITER_DB_URL` or `DATABASE_URL` is set.
 - `lib/store.ts` is the main persistence façade. It chooses Postgres first and local JSON fallback second.
 - `lib/store_legacy.ts` implements local `.data/control-plane.json` storage for developer environments.
-- `lib/auth.ts` enforces `CONTROL_PLANE_API_KEY`, optional tenant fencing via `ARBITER_TENANT_ID`, and optional role-scoped mutation authorization via `ARBITER_CONTROL_PLANE_ENFORCE_RBAC`.
-- `lib/context.ts` supplies default tenant and actor IDs.
+- `lib/auth.ts` enforces `CONTROL_PLANE_API_KEY`, optional tenant fencing via `ARBITER_TENANT_ID`, and optional role-scoped mutation authorization via `ARBITER_CONTROL_PLANE_ENFORCE_RBAC`. Direct OIDC mode uses `ARBITER_CONTROL_PLANE_OIDC_JWKS_URL` plus issuer/audience settings; `ARBITER_CONTROL_PLANE_JWT_SECRET` is the internal HS256 alternative. Both derive tenant, actor, and roles from a verified bearer token rather than browser headers.
+- `lib/context.ts` supplies default tenant and actor IDs from request-local signed identity context when available.
 - `lib/sample-intercept.ts` provides the dashboard test payload.
 - The dashboard at `/` shows policy summaries, the policy grid, and recent audit events.
 

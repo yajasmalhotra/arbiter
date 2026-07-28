@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireBundleServiceAuth } from "../../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireBundleServiceAuth } from "../../../../../lib/auth";
 import { getBundleArchive } from "../../../../../lib/store";
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -8,6 +8,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (authError) {
     return authError;
   }
+  adoptControlPlaneRequestContext(request);
 
   const { id } = await params;
   const archive = await getBundleArchive(id);

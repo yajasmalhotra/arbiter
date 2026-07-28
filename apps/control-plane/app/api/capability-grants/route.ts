@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../lib/auth";
 import { createCapabilityGrant, listCapabilityGrants } from "../../../lib/store";
 
 export async function GET(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
   return NextResponse.json({ capabilityGrants: await listCapabilityGrants() });
 }
 
 export async function POST(request: NextRequest) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
   let body: Record<string, unknown> = {};
   try {
     body = (await request.json()) as Record<string, unknown>;

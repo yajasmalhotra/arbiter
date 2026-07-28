@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireControlPlaneRole } from "../../../../lib/auth";
+import { adoptControlPlaneRequestContext, requireControlPlaneRole } from "../../../../lib/auth";
 import { deletePolicy, getPolicy, upsertPolicy } from "../../../../lib/store";
 import type { RolloutState } from "../../../../lib/types";
 
-export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const unauthorized = await requireControlPlaneRole(request, "viewer");
+  if (unauthorized) return unauthorized;
+  adoptControlPlaneRequestContext(request);
   const { id } = await params;
   const policy = await getPolicy(id);
   if (!policy) {
@@ -14,10 +17,11 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const unauthorized = requireControlPlaneRole(request, "editor");
+  const unauthorized = await requireControlPlaneRole(request, "editor");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const { id } = await params;
   const body = await request.json();
@@ -38,10 +42,11 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const unauthorized = requireControlPlaneRole(request, "approver");
+  const unauthorized = await requireControlPlaneRole(request, "approver");
   if (unauthorized) {
     return unauthorized;
   }
+  adoptControlPlaneRequestContext(request);
 
   const { id } = await params;
   const deleted = await deletePolicy(id);
