@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arbiter.dev/schemas/canonical-request.v1alpha2.schema.json",
+  "title": "Arbiter Canonical Request v1alpha2",
+  "type": "object",
+  "required": ["schema_version", "metadata", "agent_context", "tool_name", "parameters"],
+  "properties": {
+    "schema_version": {"const": "v1alpha2"},
+    "metadata": {"$ref": "#/definitions/metadata"},
+    "agent_context": {"$ref": "#/definitions/agent_context"},
+    "tool_name": {"type": "string", "minLength": 1},
+    "parameters": {"type": "object"},
+    "protocol": {"$ref": "#/definitions/protocol"},
+    "target": {"$ref": "#/definitions/target"},
+    "operation": {"type": "string"},
+    "obligations": {"type": "array", "items": {"$ref": "#/definitions/obligation"}},
+    "principal": {"$ref": "#/definitions/principal"},
+    "delegation": {"type": "array", "items": {"$ref": "#/definitions/delegation_link"}},
+    "capability": {"$ref": "#/definitions/capability"},
+    "approval": {"$ref": "#/definitions/approval"}
+  },
+  "definitions": {
+    "metadata": {"type": "object", "required": ["request_id", "tenant_id"], "properties": {"request_id": {"type": "string"}, "tenant_id": {"type": "string"}, "session_id": {"type": "string"}, "trace_id": {"type": "string"}, "provider": {"type": "string"}}},
+    "agent_context": {"type": "object", "required": ["actor"], "properties": {"actor": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "type": {"type": "string"}}}}},
+    "protocol": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "version": {"type": "string"}}},
+    "target": {"type": "object", "properties": {"server_id": {"type": "string"}, "server_uri": {"type": "string"}}},
+    "obligation": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string"}, "scope": {"type": "string"}, "limit": {"type": "integer", "minimum": 1}, "class": {"type": "string"}}},
+    "principal": {"type": "object", "required": ["subject", "tenant_id"], "properties": {"subject": {"type": "string"}, "tenant_id": {"type": "string"}, "kind": {"type": "string"}, "issuer": {"type": "string"}, "auth_method": {"type": "string"}, "workload_id": {"type": "string"}, "human_owner": {"type": "string"}}},
+    "delegation_link": {"type": "object", "required": ["parent_subject", "delegate_subject"], "properties": {"parent_subject": {"type": "string"}, "delegate_subject": {"type": "string"}, "task_id": {"type": "string"}, "grant_id": {"type": "string"}, "may_delegate": {"type": "boolean"}}},
+    "capability": {"type": "object", "required": ["grant_id", "subject", "tenant_id"], "properties": {"grant_id": {"type": "string"}, "subject": {"type": "string"}, "tenant_id": {"type": "string"}, "server_ids": {"type": "array", "items": {"type": "string"}}, "tool_names": {"type": "array", "items": {"type": "string"}}, "max_amount_cents": {"type": "integer", "minimum": 0}, "may_delegate": {"type": "boolean"}}},
+    "approval": {"type": "object", "required": ["approval_id", "action_hash"], "properties": {"approval_id": {"type": "string"}, "action_hash": {"type": "string"}, "class": {"type": "string"}, "approved_by": {"type": "string"}}}
+  }
+}

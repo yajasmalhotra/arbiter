@@ -22,6 +22,13 @@ type Decider interface {
 	Decide(ctx context.Context, req schema.CanonicalRequest) (schema.Decision, error)
 }
 
+// ObligationPlanner is implemented by policy backends that support the
+// policy-owned preflight query. Keeping it separate from Decider permits a
+// staged rollout without breaking existing OPA endpoints or test doubles.
+type ObligationPlanner interface {
+	PlanObligations(ctx context.Context, req schema.CanonicalRequest) ([]schema.Obligation, error)
+}
+
 type Client struct {
 	httpClient *http.Client
 	endpoint   string
@@ -98,6 +105,35 @@ func (c *Client) Decide(ctx context.Context, req schema.CanonicalRequest) (schem
 		return envelope.Result, ErrDeniedByPolicy
 	}
 
+	return envelope.Result, nil
+}
+
+func (c *Client) PlanObligations(ctx context.Context, req schema.CanonicalRequest) ([]schema.Obligation, error) {
+	body, err := json.Marshal(map[string]any{"input": req})
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+"/v1/data/arbiter/authz/obligations", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("opa obligation status %d", resp.StatusCode)
+	}
+	var envelope struct {
+		Result []schema.Obligation `json:"result"`
+	}
+	decoder := json.NewDecoder(resp.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return nil, err
+	}
 	return envelope.Result, nil
 }
 

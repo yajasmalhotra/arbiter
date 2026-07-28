@@ -25,7 +25,8 @@ var (
 )
 
 type Store struct {
-	db *bolt.DB
+	db  *bolt.DB
+	now func() time.Time
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -56,7 +57,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("initialize local store buckets: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, now: time.Now}, nil
 }
 
 func (s *Store) Close() error {
@@ -127,7 +128,7 @@ func (s *Store) MarkUsed(_ context.Context, jti string, ttl time.Duration) (bool
 	if jti == "" {
 		return false, fmt.Errorf("replay key is required")
 	}
-	now := time.Now()
+	now := s.now()
 	expiry := now.Add(ttl)
 
 	var allowed bool

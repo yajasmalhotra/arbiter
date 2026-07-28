@@ -17,6 +17,7 @@ import type {
   AuditEvent,
   BundleActivation,
   BundleArtifact,
+  CapabilityGrant,
   DataRevision,
   PolicyRecord,
   PolicyRevision,
@@ -80,6 +81,23 @@ function signingKeyFromRow(row: Record<string, unknown>): SigningKey {
     createdBy: String(row.created_by),
     createdAt: toISOString(row.created_at),
     activatedAt: row.activated_at ? toISOString(row.activated_at) : undefined,
+    revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
+  };
+}
+
+function capabilityGrantFromRow(row: Record<string, unknown>): CapabilityGrant {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    subject: String(row.subject),
+    workloadId: row.workload_id ? String(row.workload_id) : undefined,
+    serverIds: normalizeScopes(row.server_ids),
+    toolNames: normalizeScopes(row.tool_names),
+    maxAmountCents: row.max_amount_cents === null || row.max_amount_cents === undefined ? undefined : Number(row.max_amount_cents),
+    mayDelegate: Boolean(row.may_delegate),
+    createdBy: String(row.created_by),
+    createdAt: toISOString(row.created_at),
+    expiresAt: toISOString(row.expires_at),
     revokedAt: row.revoked_at ? toISOString(row.revoked_at) : undefined
   };
 }
@@ -445,6 +463,18 @@ type CreateServiceTokenInput = {
   actor?: string;
 };
 
+type CreateCapabilityGrantInput = {
+  name: string;
+  subject: string;
+  workloadId?: string;
+  serverIds: string[];
+  toolNames: string[];
+  maxAmountCents?: number;
+  mayDelegate?: boolean;
+  expiresAt: string;
+  actor?: string;
+};
+
 export async function listServiceTokens(): Promise<ServiceToken[]> {
   return withDbOrFallback(
     async (db) => {
@@ -545,6 +575,197 @@ export async function revokeServiceToken(id: string): Promise<ServiceToken | und
     },
     async () => {
       throw new Error("service token management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+function capabilitySigningConfig(): { keyID: string; secret: string; issuer: string; audience: string } {
+  const secret = (process.env.ARBITER_CAPABILITY_SECRET ?? "").trim();
+  if (!secret) {
+    throw new Error("ARBITER_CAPABILITY_SECRET is required to issue capability grants");
+  }
+  return {
+    keyID: (process.env.ARBITER_CAPABILITY_KID ?? "default").trim() || "default",
+    secret,
+    issuer: (process.env.ARBITER_CAPABILITY_ISSUER ?? "arbiter").trim() || "arbiter",
+    audience: (process.env.ARBITER_CAPABILITY_AUDIENCE ?? "arbiter-capability").trim() || "arbiter-capability"
+  };
+}
+
+function base64url(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function signCapabilityGrant(grant: CapabilityGrant): string {
+  const signing = capabilitySigningConfig();
+  const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT", kid: signing.keyID }));
+  const now = Math.floor(Date.now() / 1000);
+  const payload = base64url(
+    JSON.stringify({
+      grant_id: grant.id,
+      tenant_id: defaultTenantId(),
+      subject: grant.subject,
+      workload_id: grant.workloadId,
+      server_ids: grant.serverIds,
+      tool_names: grant.toolNames,
+      max_amount_cents: grant.maxAmountCents,
+      may_delegate: grant.mayDelegate,
+      iss: signing.issuer,
+      aud: signing.audience,
+      iat: now,
+      nbf: now,
+      exp: Math.floor(new Date(grant.expiresAt).getTime() / 1000),
+      jti: `cap_${randomUUID()}`
+    })
+  );
+  const signingInput = `${header}.${payload}`;
+  const signature = createHmac("sha256", signing.secret).update(signingInput).digest("base64url");
+  return `${signingInput}.${signature}`;
+}
+
+function capabilityRevocationEndpoints(): string[] {
+  return (process.env.ARBITER_CAPABILITY_REVOCATION_ENDPOINTS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+// Revocation is durable in Postgres first. Fan-out is deliberately best effort:
+// a temporarily unreachable gateway must not turn a successful revocation into
+// an apparent failure or leave the control-plane record ambiguous. Operators can
+// replay the tiny id/expiry payload to a gateway's management endpoint.
+async function synchronizeCapabilityRevocation(grant: CapabilityGrant): Promise<{ delivered: number; failed: number }> {
+  const endpoints = capabilityRevocationEndpoints();
+  const serviceKey = (process.env.ARBITER_SERVICE_SHARED_KEY ?? "").trim();
+  if (!endpoints.length || !serviceKey) {
+    return { delivered: 0, failed: 0 };
+  }
+
+  let delivered = 0;
+  let failed = 0;
+  for (const endpoint of endpoints) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3_000);
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arbiter-Service-Key": serviceKey
+        },
+        body: JSON.stringify({ grant_id: grant.id, expires_at: grant.expiresAt }),
+        signal: controller.signal
+      });
+      if (response.ok) {
+        delivered += 1;
+      } else {
+        failed += 1;
+      }
+    } catch {
+      failed += 1;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return { delivered, failed };
+}
+
+export async function listCapabilityGrants(): Promise<CapabilityGrant[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, name, subject, workload_id, server_ids, tool_names, max_amount_cents, may_delegate, created_by, created_at, expires_at, revoked_at
+          FROM capability_grants
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+        `,
+        [defaultTenantId()]
+      );
+      return result.rows.map((row) => capabilityGrantFromRow(row as Record<string, unknown>));
+    },
+    async () => []
+  );
+}
+
+export async function createCapabilityGrant(input: CreateCapabilityGrantInput): Promise<{ token: string; record: CapabilityGrant }> {
+  const name = input.name.trim();
+  const subject = input.subject.trim();
+  const serverIds = input.serverIds.map((value) => value.trim()).filter(Boolean);
+  const toolNames = input.toolNames.map((value) => value.trim()).filter(Boolean);
+  const expiresAt = new Date(input.expiresAt);
+  if (!name || !subject || !serverIds.length || !toolNames.length || Number.isNaN(expiresAt.getTime()) || expiresAt <= new Date()) {
+    throw new Error("name, subject, serverIds, toolNames, and a future expiresAt are required");
+  }
+  if (input.maxAmountCents !== undefined && (!Number.isInteger(input.maxAmountCents) || input.maxAmountCents < 0)) {
+    throw new Error("maxAmountCents must be a non-negative integer");
+  }
+  return withDbOrFallback(
+    async (db) => {
+      const now = new Date().toISOString();
+      const record: CapabilityGrant = {
+        id: `cg_${randomUUID()}`,
+        name,
+        subject,
+        workloadId: input.workloadId?.trim() || undefined,
+        serverIds,
+        toolNames,
+        maxAmountCents: input.maxAmountCents,
+        mayDelegate: Boolean(input.mayDelegate),
+        createdBy: input.actor?.trim() || defaultActor(),
+        createdAt: now,
+        expiresAt: expiresAt.toISOString()
+      };
+      await db.query(
+        `
+          INSERT INTO capability_grants (
+            id, tenant_id, name, subject, workload_id, server_ids, tool_names, max_amount_cents, may_delegate, created_by, created_at, expires_at
+          ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)
+        `,
+        [record.id, defaultTenantId(), record.name, record.subject, record.workloadId ?? null, JSON.stringify(record.serverIds), JSON.stringify(record.toolNames), record.maxAmountCents ?? null, record.mayDelegate, record.createdBy, record.createdAt, record.expiresAt]
+      );
+      await appendAuditEvent({ action: "capability_grant_created", actor: record.createdBy, metadata: { capabilityGrantId: record.id, subject: record.subject, serverIds: record.serverIds, toolNames: record.toolNames, expiresAt: record.expiresAt } });
+      return { token: signCapabilityGrant(record), record };
+    },
+    async () => {
+      throw new Error("capability grant management requires ARBITER_DB_URL");
+    }
+  );
+}
+
+export async function revokeCapabilityGrant(id: string, actor?: string): Promise<CapabilityGrant | undefined> {
+  if (!id.trim()) {
+    throw new Error("capability grant id is required");
+  }
+  return withDbOrFallback(
+    async (db) => {
+      const now = new Date().toISOString();
+      const result = await db.query(
+        `
+          UPDATE capability_grants
+          SET revoked_at = COALESCE(revoked_at, $1)
+          WHERE tenant_id = $2 AND id = $3
+          RETURNING id, name, subject, workload_id, server_ids, tool_names, max_amount_cents, may_delegate, created_by, created_at, expires_at, revoked_at
+        `,
+        [now, defaultTenantId(), id]
+      );
+      if (!result.rowCount) {
+        return undefined;
+      }
+      const record = capabilityGrantFromRow(result.rows[0] as Record<string, unknown>);
+      await appendAuditEvent({ action: "capability_grant_revoked", actor: actor?.trim() || defaultActor(), metadata: { capabilityGrantId: record.id, subject: record.subject } });
+      const sync = await synchronizeCapabilityRevocation(record);
+      if (sync.delivered || sync.failed) {
+        await appendAuditEvent({
+          action: sync.failed ? "capability_revocation_sync_partial" : "capability_revocation_synced",
+          actor: actor?.trim() || defaultActor(),
+          metadata: { capabilityGrantId: record.id, delivered: sync.delivered, failed: sync.failed }
+        });
+      }
+      return record;
+    },
+    async () => {
+      throw new Error("capability grant management requires ARBITER_DB_URL");
     }
   );
 }

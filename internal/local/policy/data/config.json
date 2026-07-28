@@ -4,6 +4,21 @@
       "policy_version": "v1",
       "data_revision": "local-dev"
     },
+    "context_requirements": {
+      "delete_backup": [
+        {
+          "type": "recent_actions",
+          "scope": "actor_session",
+          "limit": 10
+        }
+      ],
+      "create_stripe_refund": [
+        {
+          "type": "approval",
+          "class": "financial"
+        }
+      ]
+    },
     "tools": {
       "send_slack_message": {
         "domain": "slack"
@@ -67,6 +82,9 @@
       },
       "apply_patch": {
         "domain": "filesystem"
+      },
+      "a2a_send_task": {
+        "domain": "a2a"
       }
     },
     "domain_config": {
@@ -83,6 +101,9 @@
       },
       "stripe": {
         "max_refund_cents": 500000
+      },
+      "a2a": {
+        "allowed_agents": []
       }
     }
   }

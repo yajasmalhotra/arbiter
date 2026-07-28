@@ -69,6 +69,8 @@ func TestStoreReplayCache(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer store.Close()
+	base := time.Now()
+	store.now = func() time.Time { return base }
 
 	ok, err := store.MarkUsed(context.Background(), "jti-1", 20*time.Millisecond)
 	if err != nil {
@@ -86,7 +88,7 @@ func TestStoreReplayCache(t *testing.T) {
 		t.Fatalf("expected second mark within ttl to fail")
 	}
 
-	time.Sleep(25 * time.Millisecond)
+	base = base.Add(25 * time.Millisecond)
 	ok, err = store.MarkUsed(context.Background(), "jti-1", 20*time.Millisecond)
 	if err != nil {
 		t.Fatalf("mark used after expiry: %v", err)

@@ -5,6 +5,8 @@ import rego.v1
 default allow := false
 default required_context_missing := false
 
+obligations := object.get(data.arbiter.context_requirements, input.tool_name, [])
+
 known_tool if {
 	object.get(data.arbiter.tools, input.tool_name, null) != null
 }
@@ -12,6 +14,28 @@ known_tool if {
 required_context_missing if {
 	count(object.get(input, "required_context", [])) > 0
 	count(object.get(input, "previous_actions", [])) == 0
+}
+
+required_context_missing if {
+	obligation := obligations[_]
+	obligation.type == "recent_actions"
+	count(object.get(input, "previous_actions", [])) == 0
+}
+
+required_context_missing if {
+	obligation := obligations[_]
+	obligation.type == "approval"
+	approval := object.get(input, "approval", null)
+	approval == null
+}
+
+required_context_missing if {
+	obligation := obligations[_]
+	obligation.type == "approval"
+	class := object.get(obligation, "class", "")
+	class != ""
+	approval := object.get(input, "approval", {})
+	object.get(approval, "class", "") != class
 }
 
 domain_allow if {
@@ -30,10 +54,26 @@ domain_allow if {
 	data.arbiter.domain.filesystem.allow with input as input
 }
 
+domain_allow if {
+	data.arbiter.domain.a2a.allow with input as input
+}
+
+# Tool discovery is a non-side-effecting protocol operation. It is evaluated
+# independently from invocation rules so callers can only discover registered
+# tools, while argument-specific policy remains enforced at tools/call time.
+mcp_tool_discovery if {
+	input.operation == "mcp.tools/list"
+	known_tool
+}
+
 allow if {
 	known_tool
 	not required_context_missing
 	domain_allow
+}
+
+allow if {
+	mcp_tool_discovery
 }
 
 reason := "allowed" if {

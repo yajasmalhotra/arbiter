@@ -36,6 +36,46 @@ func TestDeciderAllowAndDeny(t *testing.T) {
 	}
 }
 
+func TestDeciderPlansAndEnforcesPolicyOwnedContext(t *testing.T) {
+	t.Parallel()
+	decider, err := NewDecider(context.Background())
+	if err != nil {
+		t.Fatalf("new decider: %v", err)
+	}
+	req := mustCanonicalRequest(t, "req-delete-backup", "delete_backup", map[string]any{"backup_id": "backup-1"})
+	obligations, err := decider.PlanObligations(context.Background(), req)
+	if err != nil {
+		t.Fatalf("plan obligations: %v", err)
+	}
+	if len(obligations) != 1 || obligations[0].Type != "recent_actions" {
+		t.Fatalf("expected recent-actions policy obligation, got %#v", obligations)
+	}
+	decision, err := decider.Decide(context.Background(), req)
+	if err != pdp.ErrDeniedByPolicy || !decision.RequiredContextMissing {
+		t.Fatalf("expected missing policy context denial, got decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestDeciderPlansFinancialApproval(t *testing.T) {
+	t.Parallel()
+	decider, err := NewDecider(context.Background())
+	if err != nil {
+		t.Fatalf("new decider: %v", err)
+	}
+	req := mustCanonicalRequest(t, "req-refund", "create_stripe_refund", map[string]any{"amount_cents": 100})
+	obligations, err := decider.PlanObligations(context.Background(), req)
+	if err != nil {
+		t.Fatalf("plan obligations: %v", err)
+	}
+	if len(obligations) != 1 || obligations[0].Type != "approval" || obligations[0].Class != "financial" {
+		t.Fatalf("expected financial approval obligation, got %#v", obligations)
+	}
+	decision, err := decider.Decide(context.Background(), req)
+	if err != pdp.ErrDeniedByPolicy || !decision.RequiredContextMissing {
+		t.Fatalf("expected approval-missing denial, decision=%#v err=%v", decision, err)
+	}
+}
+
 func mustCanonicalRequest(t *testing.T, requestID, toolName string, parameters map[string]any) schema.CanonicalRequest {
 	t.Helper()
 	raw, err := json.Marshal(parameters)

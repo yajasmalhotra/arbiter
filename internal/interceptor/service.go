@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"arbiter/internal/audit"
+	"arbiter/internal/enforcement"
 	"arbiter/internal/executorauth"
 	"arbiter/internal/intent"
 	"arbiter/internal/pdp"
@@ -16,9 +17,6 @@ import (
 	"arbiter/internal/state"
 	"arbiter/internal/telemetry"
 	"arbiter/internal/translator"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 type Config struct {
@@ -37,12 +35,10 @@ type Service struct {
 	stateStore       state.Store
 	decider          pdp.Decider
 	issuer           *executorauth.IssuerVerifier
-	audit            audit.Recorder
-	telemetry        telemetry.Recorder
+	engine           *enforcement.Engine
 	fastToolSet      map[string]struct{}
 	gatewaySharedKey string
 	serviceSharedKey string
-	labeler          intent.Labeler
 }
 
 type verifyExecutionRequest struct {
@@ -81,9 +77,6 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 	if config.StateLookupLimit <= 0 {
 		config.StateLookupLimit = 10
 	}
-	if telemetryRecorder == nil {
-		telemetryRecorder = telemetry.NopRecorder{}
-	}
 	if config.IntentLabeler == nil {
 		config.IntentLabeler = intent.NopLabeler{}
 	}
@@ -98,16 +91,18 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 	}
 
 	return &Service{
-		config:           config,
-		stateStore:       stateStore,
-		decider:          decider,
-		issuer:           issuer,
-		audit:            auditRecorder,
-		telemetry:        telemetryRecorder,
+		config:     config,
+		stateStore: stateStore,
+		decider:    decider,
+		issuer:     issuer,
+		engine: enforcement.New(enforcement.Config{
+			DecisionTimeout:  config.DecisionTimeout,
+			StateLookupLimit: config.StateLookupLimit,
+			IntentLabeler:    config.IntentLabeler,
+		}, stateStore, decider, issuer, auditRecorder, telemetryRecorder),
 		fastToolSet:      fastToolSet,
 		gatewaySharedKey: strings.TrimSpace(config.GatewaySharedKey),
 		serviceSharedKey: strings.TrimSpace(config.ServiceSharedKey),
-		labeler:          config.IntentLabeler,
 	}
 }
 
@@ -120,6 +115,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/intercept/anthropic", s.handleAnthropicIntercept)
 	mux.HandleFunc("POST /v1/intercept/framework/generic", s.handleGenericFrameworkIntercept)
 	mux.HandleFunc("POST /v1/intercept/framework/langchain", s.handleLangChainIntercept)
+	mux.HandleFunc("POST /v1/intercept/a2a/tasks/send", s.handleA2ATaskSendIntercept)
 	mux.HandleFunc("POST /v1/execute/verify/openai", s.handleOpenAIVerify)
 	mux.HandleFunc("POST /v1/execute/verify/anthropic", s.handleAnthropicVerify)
 	mux.HandleFunc("POST /v1/execute/verify/canonical", s.handleCanonicalVerify)
@@ -380,6 +376,24 @@ func (s *Service) handleLangChainIntercept(w http.ResponseWriter, r *http.Reques
 	s.handleCanonicalIntercept(w, r, req)
 }
 
+func (s *Service) handleA2ATaskSendIntercept(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGateway(w, r) {
+		return
+	}
+	var envelope translator.A2ATaskSendEnvelope
+	if err := decodeJSON(w, r, s.config.MaxBodyBytes, &envelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	envelope.Metadata.TraceID = traceIDForRequest(r, envelope.Metadata.TraceID)
+	req, err := translator.NormalizeA2ATaskSend(envelope, s.config.MaxParameterBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.handleCanonicalIntercept(w, r, req)
+}
+
 func (s *Service) handleCanonicalVerify(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeService(w, r) {
 		return
@@ -448,65 +462,19 @@ func (s *Service) authorizeWithKey(w http.ResponseWriter, r *http.Request, expec
 }
 
 func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
-	start := time.Now()
 	req.Metadata.TraceID = traceIDForRequest(r, req.Metadata.TraceID)
-	ctx, span := otel.Tracer("arbiter/interceptor").Start(r.Context(), "interceptor.decision")
-	span.SetAttributes(
-		attribute.String("request_id", req.Metadata.RequestID),
-		attribute.String("trace_id", req.Metadata.TraceID),
-		attribute.String("tenant_id", req.Metadata.TenantID),
-		attribute.String("tool_name", req.ToolName),
-	)
-	defer span.End()
-
-	if req.IntentLabel == "" && s.labeler != nil {
-		label, err := s.labeler.Label(ctx, req)
-		if err == nil && strings.TrimSpace(label) != "" {
-			req.IntentLabel = strings.TrimSpace(label)
-		}
-	}
-
-	var err error
-	if len(req.RequiredContext) > 0 {
-		req.PreviousActions, err = s.stateStore.RecentActions(ctx, state.LookupRequest{
-			TenantID:  req.Metadata.TenantID,
-			ActorID:   req.AgentContext.Actor.ID,
-			SessionID: req.Metadata.SessionID,
-			Limit:     s.config.StateLookupLimit,
-		})
-		if err != nil {
-			span.RecordError(err)
-			writeError(w, http.StatusServiceUnavailable, err)
-			return
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, s.config.DecisionTimeout)
-	defer cancel()
-
-	decision, err := s.decider.Decide(ctx, req)
+	result, err := s.engine.Enforce(r.Context(), req)
 	if err != nil {
-		span.RecordError(err)
 		status := http.StatusServiceUnavailable
-		if errors.Is(err, pdp.ErrDeniedByPolicy) {
+		if enforcement.IsDenied(err) {
 			status = http.StatusForbidden
 		}
-		s.recordDecision(ctx, req, decision, start)
-		writeJSON(w, status, schema.SignedDecision{Decision: decision})
+		writeJSON(w, status, schema.SignedDecision{Decision: result.Decision})
 		return
 	}
-
-	token, err := s.issuer.Issue(req, decision)
-	if err != nil {
-		span.RecordError(err)
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	s.recordDecision(ctx, req, decision, start)
 	writeJSON(w, http.StatusOK, schema.SignedDecision{
-		Decision: decision,
-		Token:    token,
+		Decision: result.Decision,
+		Token:    result.Token,
 	})
 }
 
@@ -518,26 +486,6 @@ func (s *Service) fastPermissionCheck(toolName string) error {
 		return nil
 	}
 	return errors.New("tool denied by fast permission gate")
-}
-
-func (s *Service) recordDecision(ctx context.Context, req schema.CanonicalRequest, decision schema.Decision, startedAt time.Time) {
-	latency := time.Since(startedAt)
-	s.telemetry.ObserveDecision(req.ToolName, decision.Allow, latency)
-	if s.audit == nil {
-		return
-	}
-
-	s.audit.Record(ctx, audit.Event{
-		DecisionID:    decision.DecisionID,
-		RequestID:     req.Metadata.RequestID,
-		TraceID:       req.Metadata.TraceID,
-		TenantID:      req.Metadata.TenantID,
-		ToolName:      req.ToolName,
-		Allow:         decision.Allow,
-		Reason:        decision.Reason,
-		PolicyVersion: decision.PolicyVersion,
-		Latency:       latency,
-	})
 }
 
 func traceIDForRequest(r *http.Request, current string) string {

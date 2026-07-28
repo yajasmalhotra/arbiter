@@ -87,3 +87,30 @@ func TestCanonicalRequestValidateRejectsLargePayload(t *testing.T) {
 		t.Fatal("expected payload size validation error")
 	}
 }
+
+func TestV1Alpha2HashBindsProtocolAuthorityAndCapability(t *testing.T) {
+	t.Parallel()
+	base := CanonicalRequest{
+		SchemaVersion: CurrentSchemaVersion,
+		Metadata:      Metadata{RequestID: "req-1", TenantID: "tenant-1"},
+		AgentContext:  AgentContext{Actor: Actor{ID: "agent-1"}},
+		ToolName:      "write_file",
+		Parameters:    []byte(`{"path":"/tmp/a"}`),
+		Protocol:      &Protocol{Name: "mcp"},
+		Target:        &Target{ServerID: "server-a"},
+		Capability:    &Capability{GrantID: "grant-a", Subject: "agent-1", TenantID: "tenant-1"},
+	}
+	changed := base
+	changed.Target = &Target{ServerID: "server-b"}
+	baseHash, err := base.Hash()
+	if err != nil {
+		t.Fatalf("base hash: %v", err)
+	}
+	changedHash, err := changed.Hash()
+	if err != nil {
+		t.Fatalf("changed hash: %v", err)
+	}
+	if baseHash == changedHash {
+		t.Fatal("target server must be bound into v1alpha2 hash")
+	}
+}

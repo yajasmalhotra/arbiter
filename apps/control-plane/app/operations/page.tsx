@@ -8,6 +8,7 @@ import {
   listApprovalRequests,
   listBundleActivations,
   listBundles,
+  listCapabilityGrants,
   listServiceTokens,
   listSigningKeys
 } from "@/lib/store";
@@ -17,12 +18,13 @@ export const metadata = {
 };
 
 export default async function OperationsPage() {
-  const [activeBundle, bundles, activations, serviceTokens, signingKeys, approvalRequests] = await Promise.all([
+  const [activeBundle, bundles, activations, serviceTokens, signingKeys, capabilityGrants, approvalRequests] = await Promise.all([
     getActiveBundle(),
     listBundles(),
     listBundleActivations(),
     listServiceTokens(),
     listSigningKeys(),
+    listCapabilityGrants(),
     listApprovalRequests()
   ]);
 
@@ -50,6 +52,7 @@ export default async function OperationsPage() {
         activations={activations}
         serviceTokens={serviceTokens}
         signingKeys={signingKeys}
+        capabilityGrants={capabilityGrants}
         approvalRequests={approvalRequests}
       />
     </div>

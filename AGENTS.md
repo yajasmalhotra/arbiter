@@ -88,6 +88,30 @@ Operational behavior:
 - The shadow intent labeler may annotate a request, but it cannot block traffic unless explicitly promoted in code.
 - The interceptor records decision latency and structured audit events after each decision.
 
+### `internal/enforcement/`, `internal/mcp/`, and `internal/obligations/`
+
+These packages provide the protocol-neutral enforcement core and the first
+protocol-native gateway.
+
+- `enforcement.Engine` owns normalization-independent context resolution,
+  policy evaluation, permit issuance, consumption, audit, and metrics.
+- `mcp.Gateway` proxies MCP JSON-RPC `tools/list` and `tools/call`; discovery
+  is policy-filtered and calls consume their permit immediately before upstream
+  forwarding.
+- Policy-owned obligations are planned via `data.arbiter.authz.obligations` and
+  resolved by the closed `obligations` registry. Unknown obligation types fail
+  closed; policies must never name arbitrary URLs.
+- `identity`, `delegation`, and `capability` carry authenticated principal,
+  signed delegation-chain, and scoped-grant data into the canonical request.
+  Capabilities can also bind to the principal's verified workload identity.
+  These fields are bound into v1alpha2 execution permits.
+- Human approval is a policy-owned `approval` obligation. A verified receipt
+  binds an approver, class, tenant, subject, and pre-approval action hash; the
+  complete receipt is then bound into the execution permit.
+- `translator/a2a.go` normalizes A2A task initiation into the
+  `a2a_send_task` operation. Target agents are policy-controlled through the
+  A2A domain policy and remain deny-by-default.
+
 ### `internal/schema/`
 
 This is the canonical contract boundary.

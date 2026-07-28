@@ -18,6 +18,91 @@ Arbiter sits between an agent runtime and the tools that can cause side effects.
 
 This gives you a clear control point for actions like SQL, Slack, payments, file access, and other external tools.
 
+## MCP Gateway (experimental)
+
+`arbiter-mcp` governs an existing remote MCP JSON-RPC server without requiring
+the server to add Arbiter code. It filters `tools/list` through policy and
+requires every `tools/call` to receive and consume a single-use Arbiter permit
+before the request is forwarded upstream.
+
+```bash
+ARBITER_MCP_UPSTREAM_URL=http://127.0.0.1:9000/mcp \
+go run ./cmd/arbiter-mcp
+```
+
+For a local stdio server, set `ARBITER_MCP_STDIO_COMMAND` and optional
+space-separated `ARBITER_MCP_STDIO_ARGS` instead of an upstream URL. The
+gateway keeps one line-delimited JSON-RPC subprocess connection and applies
+the identical discovery and execution enforcement path.
+
+The gateway listens at `http://127.0.0.1:8090/mcp`. Configure
+`ARBITER_MCP_SERVER_ID` to make the upstream server part of the authorization
+and permit binding. `ARBITER_GATEWAY_SHARED_KEY` is available for development
+and legacy integration; production deployments should inject an authenticated
+workload principal and scoped capability verifier through the Go gateway API.
+
+MCP tool discovery is non-side-effecting and uses the `mcp.tools/list`
+operation. Tool invocation uses `mcp.tools/call`; it binds the MCP server, tool
+name, arguments, authenticated principal, policy obligations, delegation path,
+and capability grant to the execution permit.
+
+For a signed workload-JWT deployment, set `ARBITER_MCP_JWT_SECRET`,
+`ARBITER_MCP_JWT_ISSUER`, and `ARBITER_MCP_JWT_AUDIENCE`. To enforce scoped
+grants, set `ARBITER_CAPABILITY_SECRET` and `ARBITER_REQUIRE_CAPABILITY=true`;
+the caller then sends a grant in `X-Arbiter-Capability`. Delegation chains are
+enabled with `ARBITER_DELEGATION_SECRET` and use
+`X-Arbiter-Delegation: <parent-link>,<child-link>`.
+
+In Postgres control-plane deployments, approvers can create, list, and revoke
+these credentials at `/api/capability-grants`. The raw grant is returned only
+at creation time; revocation is audited. Set `ARBITER_REDIS_ADDR` on the MCP
+gateway for shared runtime revocation state.
+
+Set `ARBITER_CAPABILITY_REVOCATION_ENDPOINTS` to the comma-separated
+service-key-protected gateway `POST /v1/capabilities/revoke` URLs and set the
+matching `ARBITER_SERVICE_SHARED_KEY` on the control plane. Revocation is then
+durable in Postgres and fanned out automatically with the grant ID and original
+expiry; the gateway writes the shared Redis revocation marker immediately.
+Without these settings, operators can call that endpoint directly to synchronize
+active gateways.
+
+For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
+`ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates
+RS256 tokens against a bounded, cached JWKS and fails closed if key discovery
+or token validation fails.
+
+For human-in-the-loop policy obligations, configure `ARBITER_APPROVAL_SECRET`.
+An approver issues a short-lived `X-Arbiter-Approval` receipt for a canonical
+action hash; the receipt cannot approve a modified action, another tenant, or
+another principal. The default policy demonstrates a `financial` approval
+obligation for MCP Stripe refunds.
+
+## Policy-Owned Context
+
+Version `v1alpha2` canonical requests support policy-issued obligations. The
+default policy demonstrates a `recent_actions` obligation for `delete_backup`.
+Arbiter resolves this bounded history from trusted state before final policy
+evaluation. A protocol client cannot bypass the requirement by omitting a
+`required_context` field; that legacy field remains only for `v1alpha1`
+compatibility.
+
+## Identity, Delegation, and Capabilities (experimental)
+
+The MCP gateway accepts an `identity.Authenticator` and validates a principal
+separately from provider-controlled actor metadata. Built-in authenticators
+cover local static configuration, signed workload JWTs, and verified mTLS URI
+SANs. Signed delegation links are supplied through `X-Arbiter-Delegation` and
+must form an attenuating parent-to-child chain ending at the authenticated
+principal.
+
+A capability verifier can require `X-Arbiter-Capability`: a short-lived signed
+grant scoped to a tenant, subject, MCP server, tool, and optional `amount_cents`
+limit. A grant may also bind to an authenticated workload identity (for example,
+a SPIFFE URI from mTLS or a workload-JWT claim), so copying the token to a
+different workload does not confer authority. Capability grants narrow authority
+and never override Rego policy. Delegated calls additionally require a grant
+marked as delegable.
+
 ## Who It Is For
 
 - Hobbyists who want a real guardrail layer around local agent projects instead of prompt-only safety checks.
@@ -60,6 +145,16 @@ flowchart LR
 ```
 
 The key design choice is that the control plane stays off the hot path. Enforcement happens in the interceptor plus local policy evaluation. Governance happens separately through signed policy bundles and rollout workflows.
+
+## A2A Task Delegation (experimental)
+
+Arbiter can normalize and gate A2A task initiation at
+`POST /v1/intercept/a2a/tasks/send`. The adapter makes the target agent's ID
+and endpoint part of the canonical request and signed permit. A2A delegation
+is deny-by-default: add target IDs to `domain_config.a2a.allowed_agents` in
+policy data before allowing task sends. Use the MCP gateway's authenticated
+principal, signed delegation-chain, and capability facilities when an A2A
+runtime calls MCP tools on behalf of a delegated task.
 
 ## Two-Minute Local Runtime (No Docker)
 

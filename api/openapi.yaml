@@ -7,6 +7,53 @@ servers:
   - url: http://localhost:8080
     description: Arbiter interceptor
 paths:
+  /mcp:
+    post:
+      summary: Arbiter MCP JSON-RPC gateway (experimental)
+      description: Proxies MCP tools/list and tools/call through Arbiter enforcement. This endpoint is served by the arbiter-mcp binary, not the interceptor binary.
+      parameters:
+        - in: header
+          name: X-Arbiter-Gateway-Key
+          schema:
+            type: string
+          required: false
+        - in: header
+          name: X-Arbiter-Capability
+          schema:
+            type: string
+          required: false
+        - in: header
+          name: X-Arbiter-Approval
+          schema:
+            type: string
+          required: false
+        - in: header
+          name: X-Arbiter-Delegation
+          schema:
+            type: string
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jsonrpc, method]
+              properties:
+                jsonrpc:
+                  const: "2.0"
+                id: {}
+                method:
+                  type: string
+                params:
+                  type: object
+      responses:
+        "200":
+          description: Upstream MCP JSON-RPC response
+        "403":
+          description: Policy or capability denial
+        "401":
+          description: Gateway or principal authentication failed
   /healthz:
     get:
       summary: Liveness probe
@@ -52,6 +99,47 @@ paths:
                 $ref: "#/components/schemas/SignedDecision"
         "401":
           description: Unauthorized
+  /v1/intercept/a2a/tasks/send:
+    post:
+      summary: Intercept an A2A task-send operation
+      parameters:
+        - in: header
+          name: X-Arbiter-Gateway-Key
+          schema:
+            type: string
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metadata, agent_context, target, task]
+              properties:
+                metadata:
+                  $ref: "#/components/schemas/Metadata"
+                agent_context:
+                  $ref: "#/components/schemas/AgentContext"
+                target:
+                  type: object
+                  required: [id]
+                  properties:
+                    id:
+                      type: string
+                    endpoint:
+                      type: string
+                task:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    message:
+                      type: object
+      responses:
+        "200":
+          description: Task delegation allowed with signed token
+        "403":
+          description: Task delegation denied
   /v1/execute/verify/canonical:
     post:
       summary: Verify a signed token against a canonical request
@@ -146,7 +234,9 @@ components:
         run_id:
           type: string
     CanonicalRequest:
-      $ref: "./schemas/canonical-request.v1alpha1.schema.json"
+      oneOf:
+        - $ref: "./schemas/canonical-request.v1alpha1.schema.json"
+        - $ref: "./schemas/canonical-request.v1alpha2.schema.json"
     SignedDecision:
       $ref: "./schemas/signed-decision.schema.json"
     OpenAIEnvelope:

@@ -111,6 +111,21 @@ export type SigningKey = {
   revokedAt?: string;
 };
 
+export type CapabilityGrant = {
+  id: string;
+  name: string;
+  subject: string;
+  workloadId?: string;
+  serverIds: string[];
+  toolNames: string[];
+  maxAmountCents?: number;
+  mayDelegate: boolean;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+};
+
 export type ControlPlaneData = {
   policies: PolicyRecord[];
   auditEvents: AuditEvent[];

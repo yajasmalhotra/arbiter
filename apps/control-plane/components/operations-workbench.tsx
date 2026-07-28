@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { controlPlaneHeaders, loadControlPlaneClientConfig } from "@/lib/control-plane-client";
 import { bundleStatusLabel, formatTimestamp, rolloutLabel, shortID } from "@/lib/presentation";
 import { cn } from "@/lib/utils";
-import type { ApprovalRequest, BundleActivation, BundleArtifact, ServiceToken, SigningKey } from "@/lib/types";
+import type { ApprovalRequest, BundleActivation, BundleArtifact, CapabilityGrant, ServiceToken, SigningKey } from "@/lib/types";
 
 const selectClass = cn(
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",
@@ -34,6 +34,7 @@ type Props = {
   activeBundle?: BundleArtifact;
   serviceTokens: ServiceToken[];
   signingKeys: SigningKey[];
+  capabilityGrants: CapabilityGrant[];
   approvalRequests: ApprovalRequest[];
 };
 
@@ -61,6 +62,7 @@ export function OperationsWorkbench(props: Props) {
   const router = useRouter();
   const [serviceTokens, setServiceTokens] = useState(props.serviceTokens);
   const [signingKeys, setSigningKeys] = useState(props.signingKeys);
+  const [capabilityGrants, setCapabilityGrants] = useState(props.capabilityGrants);
   const [approvalRequests, setApprovalRequests] = useState(props.approvalRequests);
   const [reviewNotesById, setReviewNotesById] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusMessage | null>(null);
@@ -82,6 +84,16 @@ export function OperationsWorkbench(props: Props) {
   const [keyId, setKeyId] = useState("");
   const [keyScope, setKeyScope] = useState("read");
   const [activateKeyNow, setActivateKeyNow] = useState(true);
+
+  const [capabilityName, setCapabilityName] = useState("");
+  const [capabilitySubject, setCapabilitySubject] = useState("");
+  const [capabilityWorkloadId, setCapabilityWorkloadId] = useState("");
+  const [capabilityServers, setCapabilityServers] = useState("");
+  const [capabilityTools, setCapabilityTools] = useState("");
+  const [capabilityMaxAmount, setCapabilityMaxAmount] = useState("");
+  const [capabilityMayDelegate, setCapabilityMayDelegate] = useState(false);
+  const [capabilityExpiresAt, setCapabilityExpiresAt] = useState("");
+  const [issuedCapability, setIssuedCapability] = useState("");
 
   const [pending, setPending] = useState<string | null>(null);
 
@@ -432,6 +444,84 @@ export function OperationsWorkbench(props: Props) {
     }
   }
 
+  async function handleCreateCapabilityGrant(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Capability management requires approver role or higher." });
+      return;
+    }
+    const serverIds = capabilityServers.split(",").map((value) => value.trim()).filter(Boolean);
+    const toolNames = capabilityTools.split(",").map((value) => value.trim()).filter(Boolean);
+    const maxAmountCents = capabilityMaxAmount.trim() === "" ? undefined : Number(capabilityMaxAmount);
+    if (!capabilityName.trim() || !capabilitySubject.trim() || !serverIds.length || !toolNames.length || !capabilityExpiresAt) {
+      setStatus({ kind: "error", text: "Name, subject, servers, tools, and expiry are required." });
+      return;
+    }
+    if (maxAmountCents !== undefined && (!Number.isSafeInteger(maxAmountCents) || maxAmountCents < 0)) {
+      setStatus({ kind: "error", text: "Maximum amount must be a non-negative whole number of cents." });
+      return;
+    }
+    setPending("create-capability");
+    try {
+      const res = await fetch("/api/capability-grants", {
+        method: "POST",
+        headers: requestHeaders(),
+        body: JSON.stringify({
+          name: capabilityName.trim(),
+          subject: capabilitySubject.trim(),
+          workloadId: capabilityWorkloadId.trim() || undefined,
+          serverIds,
+          toolNames,
+          maxAmountCents,
+          mayDelegate: capabilityMayDelegate,
+          expiresAt: new Date(capabilityExpiresAt).toISOString()
+        })
+      });
+      const body = await parseBody(res);
+      if (!res.ok) {
+        setStatus({ kind: "error", text: String(body.error ?? `Capability creation failed (${res.status})`) });
+        return;
+      }
+      const record = (body.record ?? null) as CapabilityGrant | null;
+      setIssuedCapability(String(body.token ?? ""));
+      if (record) setCapabilityGrants((current) => [record, ...current.filter((item) => item.id !== record.id)]);
+      setCapabilityName("");
+      setCapabilitySubject("");
+      setCapabilityWorkloadId("");
+      setCapabilityServers("");
+      setCapabilityTools("");
+      setCapabilityMaxAmount("");
+      setCapabilityMayDelegate(false);
+      setCapabilityExpiresAt("");
+      setStatus({ kind: "success", text: "Capability grant created. Copy it now." });
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleRevokeCapabilityGrant(id: string) {
+    setStatus(null);
+    if (!canApprove) {
+      setStatus({ kind: "error", text: "Capability management requires approver role or higher." });
+      return;
+    }
+    setPending(`revoke-capability:${id}`);
+    try {
+      const res = await fetch(`/api/capability-grants/${encodeURIComponent(id)}/revoke`, { method: "POST", headers: requestHeaders(false) });
+      const body = await parseBody(res);
+      if (!res.ok) {
+        setStatus({ kind: "error", text: String(body.error ?? `Capability revoke failed (${res.status})`) });
+        return;
+      }
+      const record = (body.capabilityGrant ?? null) as CapabilityGrant | null;
+      if (record) setCapabilityGrants((current) => current.map((item) => (item.id === record.id ? record : item)));
+      setStatus({ kind: "success", text: "Capability grant revoked and runtime synchronization requested." });
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {status && (
@@ -767,6 +857,28 @@ export function OperationsWorkbench(props: Props) {
               </tbody>
             </table>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Capability grants</CardTitle>
+          <CardDescription>Issue least-privilege MCP authority and revoke it when a workload no longer needs access.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <form className="grid gap-3 rounded-md border p-4 md:grid-cols-2" onSubmit={(e) => void handleCreateCapabilityGrant(e)}>
+            <div className="grid gap-2"><Label htmlFor="capability-name">Grant name</Label><Input id="capability-name" value={capabilityName} onChange={(e) => setCapabilityName(e.target.value)} disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-subject">Workload subject</Label><Input id="capability-subject" value={capabilitySubject} onChange={(e) => setCapabilitySubject(e.target.value)} placeholder="agent:payments" disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-workload-id">Workload identity (optional)</Label><Input id="capability-workload-id" value={capabilityWorkloadId} onChange={(e) => setCapabilityWorkloadId(e.target.value)} placeholder="spiffe://prod/payments" disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-servers">MCP server IDs</Label><Input id="capability-servers" value={capabilityServers} onChange={(e) => setCapabilityServers(e.target.value)} placeholder="stripe-mcp" disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-tools">Tool names</Label><Input id="capability-tools" value={capabilityTools} onChange={(e) => setCapabilityTools(e.target.value)} placeholder="create_stripe_refund" disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-max-amount">Maximum amount (cents, optional)</Label><Input id="capability-max-amount" type="number" min="0" step="1" value={capabilityMaxAmount} onChange={(e) => setCapabilityMaxAmount(e.target.value)} disabled={!canApprove} /></div>
+            <div className="grid gap-2"><Label htmlFor="capability-expiry">Expiry</Label><Input id="capability-expiry" type="datetime-local" value={capabilityExpiresAt} onChange={(e) => setCapabilityExpiresAt(e.target.value)} disabled={!canApprove} /></div>
+            <label className="flex items-end gap-2 pb-2 text-sm"><input type="checkbox" checked={capabilityMayDelegate} onChange={(e) => setCapabilityMayDelegate(e.target.checked)} disabled={!canApprove} />Allow delegation</label>
+            <div className="flex items-end"><Button type="submit" disabled={!canApprove || pending === "create-capability"}>{pending === "create-capability" ? "Creating..." : "Create capability"}</Button></div>
+          </form>
+          {issuedCapability && <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p className="font-medium">Capability credential (shown once)</p><Textarea className="mt-2 min-h-[72px] font-mono text-xs" readOnly value={issuedCapability} /></div>}
+          <div className="max-h-[320px] overflow-auto rounded-md border"><table className="w-full text-left text-sm"><thead className="bg-muted/50 text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">Name</th><th className="px-3 py-2">Subject</th><th className="px-3 py-2">Scope</th><th className="px-3 py-2">Expiry</th><th className="px-3 py-2">Action</th></tr></thead><tbody>{capabilityGrants.map((grant) => <tr key={grant.id} className="border-t"><td className="px-3 py-2">{grant.name}</td><td className="px-3 py-2 font-mono text-xs">{grant.subject}{grant.workloadId && <><br /><span className="text-muted-foreground">{grant.workloadId}</span></>}</td><td className="px-3 py-2 text-xs">{grant.serverIds.join(", ")} · {grant.toolNames.join(", ")}{grant.maxAmountCents !== undefined && <> · ≤{grant.maxAmountCents}¢</>}{grant.mayDelegate && <> · delegable</>}</td><td className="px-3 py-2">{formatTimestamp(grant.expiresAt)}</td><td className="px-3 py-2"><Button size="sm" variant="ghost" disabled={!canApprove || Boolean(grant.revokedAt) || pending === `revoke-capability:${grant.id}`} onClick={() => void handleRevokeCapabilityGrant(grant.id)}>{grant.revokedAt ? "Revoked" : "Revoke"}</Button></td></tr>)}{capabilityGrants.length === 0 && <tr><td className="px-3 py-4 text-muted-foreground" colSpan={5}>No capability grants yet.</td></tr>}</tbody></table></div>
         </CardContent>
       </Card>
 

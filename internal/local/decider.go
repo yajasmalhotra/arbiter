@@ -13,7 +13,8 @@ import (
 )
 
 type Decider struct {
-	query rego.PreparedEvalQuery
+	query           rego.PreparedEvalQuery
+	obligationQuery rego.PreparedEvalQuery
 }
 
 func NewDecider(ctx context.Context) (*Decider, error) {
@@ -39,7 +40,33 @@ func NewDecider(ctx context.Context) (*Decider, error) {
 		return nil, fmt.Errorf("prepare local policy query: %w", err)
 	}
 
-	return &Decider{query: prepared}, nil
+	obligationOptions := append([]func(*rego.Rego){}, options...)
+	obligationOptions[0] = rego.Query("data.arbiter.authz.obligations")
+	obligationPrepared, err := rego.New(obligationOptions...).PrepareForEval(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("prepare local policy obligation query: %w", err)
+	}
+
+	return &Decider{query: prepared, obligationQuery: obligationPrepared}, nil
+}
+
+func (d *Decider) PlanObligations(ctx context.Context, req schema.CanonicalRequest) ([]schema.Obligation, error) {
+	results, err := d.obligationQuery.Eval(ctx, rego.EvalInput(req))
+	if err != nil {
+		return nil, fmt.Errorf("evaluate local policy obligations: %w", err)
+	}
+	if len(results) == 0 || len(results[0].Expressions) == 0 {
+		return nil, fmt.Errorf("local policy returned no obligations")
+	}
+	raw, err := json.Marshal(results[0].Expressions[0].Value)
+	if err != nil {
+		return nil, fmt.Errorf("encode local policy obligations: %w", err)
+	}
+	var obligations []schema.Obligation
+	if err := json.Unmarshal(raw, &obligations); err != nil {
+		return nil, fmt.Errorf("decode local policy obligations: %w", err)
+	}
+	return obligations, nil
 }
 
 func (d *Decider) Decide(ctx context.Context, req schema.CanonicalRequest) (schema.Decision, error) {

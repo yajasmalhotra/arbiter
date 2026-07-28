@@ -38,6 +38,10 @@ This Next.js application provides an initial governance control plane for Arbite
   - `POST /api/signing-keys`
   - `POST /api/signing-keys/:id/activate`
   - `POST /api/signing-keys/:id/revoke`
+- Capability-grant APIs:
+  - `GET /api/capability-grants`
+  - `POST /api/capability-grants`
+  - `POST /api/capability-grants/:id/revoke`
 - Revision APIs:
   - `GET /api/revisions`
 - Audit read API:
@@ -83,3 +87,17 @@ In Postgres mode, manage keys with the signing-key APIs; in fallback mode, signi
 - `ARBITER_BUNDLE_SIGNING_KEY_ID`
 - `ARBITER_BUNDLE_SIGNING_SCOPE`
 - `ARBITER_BUNDLE_SIGNING_SECRET`
+
+Capability grants require `ARBITER_CAPABILITY_SECRET` and are available only
+with Postgres persistence. Creating a grant returns its signed credential once;
+the response record contains only non-secret metadata. A grant can optionally
+be tied to a workload identity (such as a SPIFFE URI) that the MCP gateway has
+authenticated through mTLS or a workload JWT. Configure MCP gateways with the
+same capability signing settings and use Redis-backed revocation for distributed
+invalidation.
+
+For automatic runtime invalidation, configure
+`ARBITER_CAPABILITY_REVOCATION_ENDPOINTS` with comma-separated gateway
+`/v1/capabilities/revoke` URLs plus the matching `ARBITER_SERVICE_SHARED_KEY`.
+The control plane persists the revocation before best-effort authenticated
+fan-out, and records delivery results in the audit log.
