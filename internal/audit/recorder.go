@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -20,6 +21,10 @@ type Event struct {
 
 type Recorder interface {
 	Record(ctx context.Context, event Event)
+}
+
+type ReadyChecker interface {
+	Ready(context.Context) error
 }
 
 type LogRecorder struct {
@@ -46,4 +51,11 @@ func (r *LogRecorder) Record(_ context.Context, event Event) {
 		slog.String("policy_version", event.PolicyVersion),
 		slog.Duration("latency", event.Latency),
 	)
+}
+
+func (r *LogRecorder) Ready(_ context.Context) error {
+	if r == nil || r.logger == nil {
+		return errors.New("audit logger is not configured")
+	}
+	return nil
 }

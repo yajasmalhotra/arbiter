@@ -75,6 +75,9 @@ enterprise baseline: authenticated workload identity, RS256 execution permits,
 Redis-backed replay and state, durable Postgres audit, inbound gateway and
 revocation service keys, and required RS256 capability grants. This startup
 check deliberately rejects static-agent and shared-HMAC capability defaults.
+The MCP gateway exposes `GET /healthz` for process liveness and `GET /readyz`
+for dependency readiness; the latter checks OPA, state, permit replay, and
+configured audit sinks before accepting traffic in a load-balancer rotation.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates

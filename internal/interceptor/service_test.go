@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"arbiter/internal/audit"
 	"arbiter/internal/executorauth"
 	"arbiter/internal/identity"
 	"arbiter/internal/pdp"
@@ -70,6 +71,11 @@ type readyStore struct {
 	state.Store
 	readyErr error
 }
+
+type readyAuditRecorder struct{ readyErr error }
+
+func (r readyAuditRecorder) Record(context.Context, audit.Event) {}
+func (r readyAuditRecorder) Ready(context.Context) error         { return r.readyErr }
 
 func (s readyStore) Ready(_ context.Context) error {
 	return s.readyErr
@@ -184,6 +190,25 @@ func TestServiceReadyzReturnsUnavailableWhenRequiredWorkloadIdentityIsMissing(t 
 	mux.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 for missing required workload identity, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServiceReadyzReturnsUnavailableWhenAuditSinkIsNotReady(t *testing.T) {
+	t.Parallel()
+	service := NewService(
+		Config{DecisionTimeout: time.Second},
+		state.NewMemoryStore(),
+		pdp.StaticDecider{Decision: defaultAllowDecision("decision-readiness-audit")},
+		executorauth.NewIssuerVerifier([]byte("top-secret"), "arbiter", time.Minute, executorauth.NewMemoryReplayCache()),
+		readyAuditRecorder{readyErr: errors.New("audit unavailable")},
+		nil,
+	)
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for unavailable audit sink, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 

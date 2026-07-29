@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -92,6 +93,13 @@ func (r *PostgresRecorder) Record(_ context.Context, event Event) {
 			r.logger.Warn("dropping audit event because postgres queue is full")
 		}
 	}
+}
+
+func (r *PostgresRecorder) Ready(ctx context.Context) error {
+	if r == nil || r.pool == nil || r.closed.Load() {
+		return errors.New("postgres audit recorder is not available")
+	}
+	return r.pool.Ping(ctx)
 }
 
 func (r *PostgresRecorder) run() {

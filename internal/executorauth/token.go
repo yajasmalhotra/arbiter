@@ -28,6 +28,10 @@ type ReplayCache interface {
 	MarkUsed(ctx context.Context, jti string, ttl time.Duration) (bool, error)
 }
 
+type replayReadyChecker interface {
+	Ready(context.Context) error
+}
+
 type MemoryReplayCache struct {
 	now   func() time.Time
 	used  map[string]time.Time
@@ -63,6 +67,8 @@ func (c *MemoryReplayCache) MarkUsed(_ context.Context, jti string, ttl time.Dur
 	return true, nil
 }
 
+func (c *MemoryReplayCache) Ready(_ context.Context) error { return nil }
+
 type RedisReplayCache struct {
 	client redis.UniversalClient
 	prefix string
@@ -77,6 +83,13 @@ func NewRedisReplayCache(client redis.UniversalClient, prefix string) *RedisRepl
 
 func (c *RedisReplayCache) MarkUsed(ctx context.Context, jti string, ttl time.Duration) (bool, error) {
 	return c.client.SetNX(ctx, c.prefix+":"+jti, "used", ttl).Result()
+}
+
+func (c *RedisReplayCache) Ready(ctx context.Context) error {
+	if c == nil || c.client == nil {
+		return errors.New("replay cache is not configured")
+	}
+	return c.client.Ping(ctx).Err()
 }
 
 type Claims struct {
@@ -198,6 +211,19 @@ func newRS256IssuerVerifier(privateKeys map[string]*rsa.PrivateKey, publicKeys m
 		replay:      replay,
 		now:         time.Now,
 	}
+}
+
+// Ready verifies the shared replay backend when it exposes a health check.
+// In-memory replay remains usable for local development; production wiring
+// supplies Redis and therefore makes readiness dependency-aware.
+func (i *IssuerVerifier) Ready(ctx context.Context) error {
+	if i == nil || i.replay == nil {
+		return errors.New("permit replay cache is not configured")
+	}
+	if checker, ok := i.replay.(replayReadyChecker); ok {
+		return checker.Ready(ctx)
+	}
+	return nil
 }
 
 // ParseRS256PrivateKeyPEM accepts standard PKCS#1 and PKCS#8 RSA private-key

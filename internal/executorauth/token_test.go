@@ -6,11 +6,19 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"testing"
 	"time"
 
 	"arbiter/internal/schema"
 )
+
+type unavailableReplayCache struct{}
+
+func (unavailableReplayCache) MarkUsed(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+func (unavailableReplayCache) Ready(context.Context) error { return errors.New("redis unavailable") }
 
 func baseRequest() schema.CanonicalRequest {
 	return schema.CanonicalRequest{
@@ -56,6 +64,14 @@ func TestIssueAndVerify(t *testing.T) {
 
 	if claims.DecisionID != "decision-1" {
 		t.Fatalf("unexpected decision id: %s", claims.DecisionID)
+	}
+}
+
+func TestIssuerReadinessChecksReplayBackend(t *testing.T) {
+	t.Parallel()
+	issuer := NewIssuerVerifier([]byte("top-secret"), "arbiter", time.Minute, unavailableReplayCache{})
+	if err := issuer.Ready(context.Background()); err == nil {
+		t.Fatal("expected unavailable replay cache to make issuer unready")
 	}
 }
 

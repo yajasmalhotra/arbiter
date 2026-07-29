@@ -39,6 +39,7 @@ type Service struct {
 	stateStore       state.Store
 	decider          pdp.Decider
 	issuer           *executorauth.IssuerVerifier
+	auditRecorder    audit.Recorder
 	engine           *enforcement.Engine
 	fastToolSet      map[string]struct{}
 	gatewaySharedKey string
@@ -96,10 +97,11 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 	}
 
 	return &Service{
-		config:     config,
-		stateStore: stateStore,
-		decider:    decider,
-		issuer:     issuer,
+		config:        config,
+		stateStore:    stateStore,
+		decider:       decider,
+		issuer:        issuer,
+		auditRecorder: auditRecorder,
 		engine: enforcement.New(enforcement.Config{
 			DecisionTimeout:  config.DecisionTimeout,
 			StateLookupLimit: config.StateLookupLimit,
@@ -148,6 +150,16 @@ func (s *Service) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if checker, ok := s.decider.(readyChecker); ok {
+		if err := checker.Ready(ctx); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+	if err := s.issuer.Ready(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if checker, ok := s.auditRecorder.(audit.ReadyChecker); ok {
 		if err := checker.Ready(ctx); err != nil {
 			writeError(w, http.StatusServiceUnavailable, err)
 			return

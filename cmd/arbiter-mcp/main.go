@@ -111,9 +111,10 @@ func main() {
 		}
 		permitIssuer = executorauth.NewIssuerVerifierWithRS256PrivateKeys(map[string]*rsa.PrivateKey{tokenActiveKeyID: privateKey}, tokenActiveKeyID, tokenIssuer, tokenTTL, replay)
 	}
+	policyClient := pdp.NewClient(stringEnv("ARBITER_OPA_URL", "http://localhost:8181"), stringEnv("ARBITER_OPA_PATH", "/v1/data/arbiter/authz/decision"), decisionTimeout)
 	engine := enforcement.New(enforcement.Config{DecisionTimeout: decisionTimeout, StateLookupLimit: intEnv("ARBITER_STATE_LOOKUP_LIMIT", 10), PolicyOwnedObligations: true},
 		stateStore,
-		pdp.NewClient(stringEnv("ARBITER_OPA_URL", "http://localhost:8181"), stringEnv("ARBITER_OPA_PATH", "/v1/data/arbiter/authz/decision"), decisionTimeout),
+		policyClient,
 		permitIssuer,
 		auditRecorder, metrics)
 
@@ -202,6 +203,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /mcp", gateway)
+	mux.Handle("GET /readyz", newReadinessHandler(readinessConfig{
+		Timeout:                    decisionTimeout,
+		RequireWorkloadIdentity:    requireWorkloadIdentity,
+		WorkloadIdentityConfigured: oidcJWKSURL != "" || mcpJWTSecret != "",
+		State:                      stateStore,
+		Decider:                    policyClient,
+		Issuer:                     permitIssuer,
+		Audit:                      auditRecorder,
+	}))
 	mux.HandleFunc("POST /v1/capabilities/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if capabilityVerifier == nil || serviceSharedKey == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Arbiter-Service-Key")), []byte(serviceSharedKey)) != 1 {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
