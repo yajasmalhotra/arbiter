@@ -46,6 +46,16 @@ export type RuntimeDecisionEvent = {
   latencyMs?: number;
 };
 
+export type RuntimeDecisionSummary = {
+  windowHours: number;
+  total: number;
+  allowed: number;
+  denied: number;
+  recorded: number;
+  denialRate: number;
+  topDeniedTools: Array<{ toolName: string; count: number }>;
+};
+
 export type PolicyRevision = {
   id: string;
   policyIds: string[];

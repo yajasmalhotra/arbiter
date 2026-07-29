@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { listAuditEvents, listPolicies, listRuntimeDecisionEvents, verifyAuditIntegrity } from "@/lib/store";
+import { getRuntimeDecisionSummary, listAuditEvents, listPolicies, listRuntimeDecisionEvents, verifyAuditIntegrity } from "@/lib/store";
 import { auditActionLabel, formatTimestamp, rolloutLabel } from "@/lib/presentation";
 import { establishControlPlanePageContext } from "@/lib/server-identity";
 import { runWithControlPlaneRequestContext } from "@/lib/context";
@@ -28,7 +28,7 @@ export default async function HomePage() {
       </div>
     );
   }
-  const [policies, auditEvents, auditIntegrity, runtimeDecisions] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity(), listRuntimeDecisionEvents({ limit: 10 })]));
+  const [policies, auditEvents, auditIntegrity, runtimeDecisions, runtimeSummary] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity(), listRuntimeDecisionEvents({ limit: 10 }), getRuntimeDecisionSummary()]));
   const byState = policies.reduce<Record<string, number>>((acc, policy) => {
     acc[policy.rolloutState] = (acc[policy.rolloutState] || 0) + 1;
     return acc;
@@ -67,6 +67,23 @@ export default async function HomePage() {
           </CardHeader>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Enforcement overview</CardTitle>
+          <CardDescription>Runtime decisions for this tenant in the last {runtimeSummary.windowHours} hours</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-4">
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Total decisions</p><p className="mt-1 text-2xl font-semibold">{runtimeSummary.total}</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Denied</p><p className="mt-1 text-2xl font-semibold">{runtimeSummary.denied}</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Denial rate</p><p className="mt-1 text-2xl font-semibold">{(runtimeSummary.denialRate * 100).toFixed(1)}%</p></div>
+          <div className="rounded-md border p-3">
+            <p className="text-xs text-muted-foreground">Top denied tools</p>
+            {runtimeSummary.topDeniedTools.length === 0 ? <p className="mt-2 text-sm">None</p> : <div className="mt-2 flex flex-wrap gap-1">{runtimeSummary.topDeniedTools.slice(0, 3).map((tool) => <Badge key={tool.toolName} variant="outline">{tool.toolName} · {tool.count}</Badge>)}</div>}
+          </div>
+          <Button variant="link" className="h-auto w-fit p-0 md:col-span-4" asChild><Link href="/decisions">Open decision explorer →</Link></Button>
+        </CardContent>
+      </Card>
 
       <Card className="border-primary/20 bg-primary/5">
         <CardHeader>

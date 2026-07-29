@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeRuntimeDecisionQuery, runtimeDecisionEventFromRow } from "./store";
+import { normalizeRuntimeDecisionQuery, runtimeDecisionEventFromRow, runtimeDecisionSummaryFromRows } from "./store";
 
 describe("runtime decision activity", () => {
   it("normalizes a persisted enforcement decision without exposing arbitrary metadata", () => {
@@ -49,6 +49,25 @@ describe("runtime decision activity", () => {
       identifier: "decision-1",
       before: "2026-07-28T12:00:00.000Z",
       beforeId: "runtime-1"
+    });
+  });
+
+  it("builds a stable enforcement summary from database aggregates", () => {
+    expect(runtimeDecisionSummaryFromRows(
+      { total: "20", allowed: 12, denied: "6" },
+      [{ tool_name: "create_refund", count: "4" }, { tool_name: "delete_file", count: 2 }],
+      24
+    )).toEqual({
+      windowHours: 24,
+      total: 20,
+      allowed: 12,
+      denied: 6,
+      recorded: 2,
+      denialRate: 0.3,
+      topDeniedTools: [
+        { toolName: "create_refund", count: 4 },
+        { toolName: "delete_file", count: 2 }
+      ]
     });
   });
 });

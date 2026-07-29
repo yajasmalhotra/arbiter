@@ -32,6 +32,7 @@ import type {
   PolicyRecord,
   PolicyRevision,
   RuntimeDecisionEvent,
+  RuntimeDecisionSummary,
   RolloutState,
   SigningKey,
   ServiceToken
@@ -1557,6 +1558,75 @@ export async function listRuntimeDecisionEvents(query: RuntimeDecisionQuery = {}
       return result.rows.map((row) => runtimeDecisionEventFromRow(row as Record<string, unknown>));
     },
     async () => []
+  );
+}
+
+function nonNegativeInteger(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+export function runtimeDecisionSummaryFromRows(
+  counts: Record<string, unknown>,
+  deniedToolRows: Array<Record<string, unknown>>,
+  windowHours: number
+): RuntimeDecisionSummary {
+  const total = nonNegativeInteger(counts.total);
+  const allowed = nonNegativeInteger(counts.allowed);
+  const denied = nonNegativeInteger(counts.denied);
+  const recorded = Math.max(0, total - allowed - denied);
+  return {
+    windowHours,
+    total,
+    allowed,
+    denied,
+    recorded,
+    denialRate: total > 0 ? denied / total : 0,
+    topDeniedTools: deniedToolRows
+      .map((row) => ({
+        toolName: typeof row.tool_name === "string" && row.tool_name.trim() ? row.tool_name : "unknown",
+        count: nonNegativeInteger(row.count)
+      }))
+      .filter((entry) => entry.count > 0)
+  };
+}
+
+export async function getRuntimeDecisionSummary(windowHours = 24): Promise<RuntimeDecisionSummary> {
+  const boundedWindow = Math.max(1, Math.min(Math.floor(Number(windowHours)) || 24, 24 * 30));
+  const since = new Date(Date.now() - boundedWindow * 60 * 60 * 1000).toISOString();
+  return withDbOrFallback(
+    async (db) => {
+      const [counts, deniedTools] = await Promise.all([
+        db.query(
+          `
+            SELECT
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE metadata->>'allow' = 'true')::int AS allowed,
+              COUNT(*) FILTER (WHERE metadata->>'allow' = 'false')::int AS denied
+            FROM runtime_audit_events
+            WHERE tenant_id = $1 AND action = 'intercept_decision' AND at >= $2
+          `,
+          [defaultTenantId(), since]
+        ),
+        db.query(
+          `
+            SELECT COALESCE(NULLIF(metadata->>'tool_name', ''), 'unknown') AS tool_name, COUNT(*)::int AS count
+            FROM runtime_audit_events
+            WHERE tenant_id = $1 AND action = 'intercept_decision' AND metadata->>'allow' = 'false' AND at >= $2
+            GROUP BY 1
+            ORDER BY count DESC, tool_name ASC
+            LIMIT 5
+          `,
+          [defaultTenantId(), since]
+        )
+      ]);
+      return runtimeDecisionSummaryFromRows(
+        (counts.rows[0] ?? {}) as Record<string, unknown>,
+        deniedTools.rows as Array<Record<string, unknown>>,
+        boundedWindow
+      );
+    },
+    async () => runtimeDecisionSummaryFromRows({}, [], boundedWindow)
   );
 }
 

@@ -94,6 +94,9 @@ without exposing raw tool parameters.
 The control plane's **Decision explorer** adds exact outcome, tool, and
 decision/request/trace-ID filters plus bounded cursor pagination for incident
 investigation at tenant scale.
+The dashboard also shows a tenant-scoped 24-hour enforcement overview with
+decision volume, denial count and rate, and top denied tools. The same aggregate
+is available at `GET /api/runtime-audit/summary?hours=24`.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates

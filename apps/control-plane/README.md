@@ -130,6 +130,11 @@ decision/request/trace-ID filters. Queries are tenant-scoped, bounded to 100
 records, and cursor-paginated; only normalized decision metadata is returned,
 never raw tool parameters.
 
+The dashboard summarizes the last 24 hours of enforcement volume, denials,
+denial rate, and top denied tools. Automation can read the same tenant-scoped
+aggregate from `GET /api/runtime-audit/summary?hours=24`; the window is bounded
+between one hour and 30 days.
+
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.
