@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { controlPlaneHeaders, loadControlPlaneClientConfig } from "@/lib/control-plane-client";
+import { summarizeBundleChanges } from "@/lib/bundle-diff";
 import { bundleStatusLabel, formatTimestamp, rolloutLabel, shortID } from "@/lib/presentation";
 import { cn } from "@/lib/utils";
 import type { ApprovalRequest, BundleActivation, BundleArtifact, CapabilityGrant, ServiceToken, SigningKey } from "@/lib/types";
@@ -101,6 +102,8 @@ export function OperationsWorkbench(props: Props) {
   const canEdit = hasMinimumRole(currentRole, "editor");
   const canApprove = hasMinimumRole(currentRole, "approver");
   const pendingApprovals = approvalRequests.filter((request) => request.state === "pending");
+  const selectedBundle = props.bundles.find((bundle) => bundle.id === promoteBundleId);
+  const releasePreview = summarizeBundleChanges(props.activeBundle, selectedBundle);
 
   useEffect(() => {
     const load = () => {
@@ -583,6 +586,18 @@ export function OperationsWorkbench(props: Props) {
                   ))}
                 </select>
               </div>
+              {releasePreview && (
+                <div className="rounded-md border bg-muted/20 p-3 text-xs">
+                  <p className="font-medium text-foreground">{releasePreview.baselineAvailable ? "Change preview vs current production" : "First production release preview"}</p>
+                  <div className="mt-2 grid gap-1 text-muted-foreground">
+                    <p>Policies: +{releasePreview.policies.added.length} added · ~{releasePreview.policies.changed.length} changed · −{releasePreview.policies.removed.length} removed</p>
+                    <p>Data keys: +{releasePreview.data.added.length} added · ~{releasePreview.data.changed.length} changed · −{releasePreview.data.removed.length} removed</p>
+                    {[...releasePreview.policies.changed, ...releasePreview.policies.added, ...releasePreview.policies.removed].slice(0, 5).length > 0 && (
+                      <p>Policy names: {[...releasePreview.policies.changed, ...releasePreview.policies.added, ...releasePreview.policies.removed].slice(0, 5).join(", ")}</p>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="grid gap-2">
                 <Label htmlFor="promote-channel">Channel</Label>
                 <select

@@ -365,6 +365,8 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
   Postgres audit, and a service-boundary key must all be configured.
 - Decisions are traceable by decision ID, policy version, data revision, request ID, and trace ID.
 - Production bundle promotion and rollback can be approval-gated in the control plane.
+- Operations shows a compact bundle change preview (policy and top-level data
+  changes) before an operator requests a promotion.
 - Production approval uses separation of duties: the requester cannot approve their own rollout or rollback.
 - The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
 - The control plane supports signed, tenant-scoped operator identities with
