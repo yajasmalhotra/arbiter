@@ -15,6 +15,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test repository hygiene scanner
+        run: ./tools/ci/secret_history_scan_test.sh
+
       - name: Run repository hygiene scan
         run: ./tools/ci/secret_history_scan.sh
 
@@ -37,7 +40,7 @@ jobs:
       - name: Set up OPA
         uses: open-policy-agent/setup-opa@v2
         with:
-          version: latest
+          version: 1.18.2
 
       - name: Run policy tests
         run: opa test policy/core policy/domain policy/tests policy/data -v
@@ -63,8 +66,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Run control-plane tests
         run: npm run test
+
+      - name: Build control plane
+        run: npm run build
 
   openclaw-plugin:
     runs-on: ubuntu-latest

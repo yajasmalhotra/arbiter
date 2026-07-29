@@ -6,8 +6,9 @@ import path from "node:path";
 
 import { DEFAULT_PROTECT_TOOLS, resolveActorId, resolvePluginConfig } from "../src/config.js";
 
-test("resolvePluginConfig applies defaults and local runtime fallbacks", () => {
+test("resolvePluginConfig applies defaults and local runtime fallbacks", (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "arbiter-openclaw-test-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const localConfigPath = path.join(tempDir, "config.json");
   fs.writeFileSync(
     localConfigPath,
@@ -30,8 +31,12 @@ test("resolvePluginConfig applies defaults and local runtime fallbacks", () => {
   assert.deepEqual(cfg.missing, []);
 });
 
-test("resolvePluginConfig reports missing required fields", () => {
-  const cfg = resolvePluginConfig({});
+test("resolvePluginConfig reports missing required fields", (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "arbiter-openclaw-test-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const cfg = resolvePluginConfig({
+    localConfigPath: path.join(tempDir, "missing.json")
+  });
   assert.deepEqual(cfg.missing, ["arbiterUrl", "tenantId"]);
 });
 
