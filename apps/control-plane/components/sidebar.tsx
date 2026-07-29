@@ -12,6 +12,7 @@ export function Sidebar() {
   const dashboardActive =
     pathname === "/" || (pathname.startsWith("/policies/") && pathname !== "/policies/new");
   const createActive = pathname === "/policies/new";
+  const decisionsActive = pathname.startsWith("/decisions");
   const operationsActive = pathname.startsWith("/operations");
 
   return (
@@ -29,6 +30,9 @@ export function Sidebar() {
         </Button>
         <Button variant={createActive ? "secondary" : "ghost"} className="justify-start" asChild>
           <Link href="/policies/new">Create Rule</Link>
+        </Button>
+        <Button variant={decisionsActive ? "secondary" : "ghost"} className="justify-start" asChild>
+          <Link href="/decisions">Decisions</Link>
         </Button>
         <Button variant={operationsActive ? "secondary" : "ghost"} className="justify-start" asChild>
           <Link href="/operations">Operations</Link>

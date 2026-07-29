@@ -28,7 +28,7 @@ export default async function HomePage() {
       </div>
     );
   }
-  const [policies, auditEvents, auditIntegrity, runtimeDecisions] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity(), listRuntimeDecisionEvents()]));
+  const [policies, auditEvents, auditIntegrity, runtimeDecisions] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity(), listRuntimeDecisionEvents({ limit: 10 })]));
   const byState = policies.reduce<Record<string, number>>((acc, policy) => {
     acc[policy.rolloutState] = (acc[policy.rolloutState] || 0) + 1;
     return acc;
@@ -148,6 +148,9 @@ export default async function HomePage() {
               ))}
             </ul>
           )}
+          <Button variant="link" className="mt-3 h-auto p-0" asChild>
+            <Link href="/decisions">Investigate all decisions →</Link>
+          </Button>
         </CardContent>
       </Card>
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runtimeDecisionEventFromRow } from "./store";
+import { normalizeRuntimeDecisionQuery, runtimeDecisionEventFromRow } from "./store";
 
 describe("runtime decision activity", () => {
   it("normalizes a persisted enforcement decision without exposing arbitrary metadata", () => {
@@ -31,6 +31,24 @@ describe("runtime decision activity", () => {
       reason: "approval required",
       policyVersion: "2026.07.28",
       latencyMs: 13.5
+    });
+  });
+
+  it("bounds and normalizes investigation filters", () => {
+    expect(normalizeRuntimeDecisionQuery({
+      limit: 500,
+      outcome: "deny",
+      toolName: "  create_refund  ",
+      identifier: " decision-1 ",
+      before: "2026-07-28T12:00:00Z",
+      beforeId: " runtime-1 "
+    })).toEqual({
+      limit: 100,
+      outcome: "deny",
+      toolName: "create_refund",
+      identifier: "decision-1",
+      before: "2026-07-28T12:00:00.000Z",
+      beforeId: "runtime-1"
     });
   });
 });

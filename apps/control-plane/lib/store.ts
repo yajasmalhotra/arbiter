@@ -1489,19 +1489,70 @@ export function runtimeDecisionEventFromRow(row: Record<string, unknown>): Runti
   };
 }
 
-export async function listRuntimeDecisionEvents(limit = 10): Promise<RuntimeDecisionEvent[]> {
-  const boundedLimit = Math.max(1, Math.min(Math.floor(limit) || 10, 100));
+export type RuntimeDecisionQuery = {
+  limit?: number;
+  outcome?: "allow" | "deny";
+  toolName?: string;
+  identifier?: string;
+  before?: string;
+  beforeId?: string;
+};
+
+export type NormalizedRuntimeDecisionQuery = {
+  limit: number;
+  outcome?: "allow" | "deny";
+  toolName?: string;
+  identifier?: string;
+  before?: string;
+  beforeId?: string;
+};
+
+function boundedQueryValue(value: string | undefined, maxLength: number): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized.slice(0, maxLength) : undefined;
+}
+
+export function normalizeRuntimeDecisionQuery(query: RuntimeDecisionQuery = {}): NormalizedRuntimeDecisionQuery {
+  const limit = Math.max(1, Math.min(Math.floor(Number(query.limit)) || 10, 100));
+  const outcome = query.outcome === "allow" || query.outcome === "deny" ? query.outcome : undefined;
+  const beforeDate = query.before ? new Date(query.before) : undefined;
+  const before = beforeDate && Number.isFinite(beforeDate.getTime()) ? beforeDate.toISOString() : undefined;
+  return {
+    limit,
+    outcome,
+    toolName: boundedQueryValue(query.toolName, 128),
+    identifier: boundedQueryValue(query.identifier, 128),
+    before,
+    beforeId: before ? boundedQueryValue(query.beforeId, 128) : undefined
+  };
+}
+
+export async function listRuntimeDecisionEvents(query: RuntimeDecisionQuery = {}): Promise<RuntimeDecisionEvent[]> {
+  const normalized = normalizeRuntimeDecisionQuery(query);
   return withDbOrFallback(
     async (db) => {
       const result = await db.query(
         `
           SELECT id, at, metadata
           FROM runtime_audit_events
-          WHERE tenant_id = $1 AND action = 'intercept_decision'
+          WHERE tenant_id = $1
+            AND action = 'intercept_decision'
+            AND ($2::text IS NULL OR metadata->>'allow' = $2)
+            AND ($3::text IS NULL OR metadata->>'tool_name' = $3)
+            AND ($4::text IS NULL OR metadata->>'decision_id' = $4 OR metadata->>'request_id' = $4 OR metadata->>'trace_id' = $4)
+            AND ($5::timestamptz IS NULL OR at < $5::timestamptz OR (at = $5::timestamptz AND ($6::text IS NULL OR id < $6)))
           ORDER BY at DESC, id DESC
-          LIMIT $2
+          LIMIT $7
         `,
-        [defaultTenantId(), boundedLimit]
+        [
+          defaultTenantId(),
+          normalized.outcome === "allow" ? "true" : normalized.outcome === "deny" ? "false" : null,
+          normalized.toolName ?? null,
+          normalized.identifier ?? null,
+          normalized.before ?? null,
+          normalized.beforeId ?? null,
+          normalized.limit
+        ]
       );
       return result.rows.map((row) => runtimeDecisionEventFromRow(row as Record<string, unknown>));
     },

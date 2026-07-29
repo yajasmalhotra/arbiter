@@ -125,6 +125,11 @@ introducing unsealed rows into the governance audit chain; gateway readiness
 fails if its bounded runtime-audit queue drops an event or Postgres persistence
 fails.
 
+Use `/decisions` to investigate runtime outcomes with exact outcome, tool, and
+decision/request/trace-ID filters. Queries are tenant-scoped, bounded to 100
+records, and cursor-paginated; only normalized decision metadata is returned,
+never raw tool parameters.
+
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.

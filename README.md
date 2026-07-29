@@ -91,6 +91,9 @@ audit delivery makes readiness fail and removes the gateway from rotation.
 The dashboard's **Recent runtime decisions** card and
 `GET /api/runtime-audit?limit=10` provide tenant-scoped allow/deny visibility
 without exposing raw tool parameters.
+The control plane's **Decision explorer** adds exact outcome, tool, and
+decision/request/trace-ID filters plus bounded cursor pagination for incident
+investigation at tenant scale.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates
