@@ -56,6 +56,22 @@ export type RuntimeDecisionSummary = {
   topDeniedTools: Array<{ toolName: string; count: number }>;
 };
 
+export type PolicyTestScenario = {
+  id: string;
+  policyId: string;
+  name: string;
+  interceptPath: string;
+  payload: unknown;
+  expectedOutcome: "allow" | "deny";
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+  lastObservedOutcome?: "allow" | "deny" | "error";
+  lastPassed?: boolean;
+  lastError?: string;
+};
+
 export type PolicyRevision = {
   id: string;
   policyIds: string[];
@@ -161,6 +177,7 @@ export type CapabilityGrant = {
 
 export type ControlPlaneData = {
   policies: PolicyRecord[];
+  policyTestScenarios: PolicyTestScenario[];
   auditEvents: AuditEvent[];
   policyRevisions: PolicyRevision[];
   dataRevisions: DataRevision[];

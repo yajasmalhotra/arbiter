@@ -140,7 +140,15 @@ interceptor. The test endpoint requires viewer access and adopts the signed
 tenant context before loading a policy. In production, configure `ARBITER_URL`,
 `ARBITER_POLICY_TEST_GATEWAY_KEY`, and optionally
 `ARBITER_POLICY_TEST_BEARER_TOKEN`; arbitrary browser-supplied target overrides
-are disabled unless `ARBITER_ALLOW_TEST_URL_OVERRIDE=true`.
+are disabled unless `ARBITER_ALLOW_TEST_URL_OVERRIDE=true`. Override targets
+never receive the configured server credentials. Set
+`ARBITER_POLICY_TEST_TIMEOUT_MS` to tune the bounded 10-second request timeout.
+
+Editors can save up to 50 named allow/deny regression scenarios per policy.
+Viewers can run the suite against the configured interceptor with five
+concurrent requests. The control plane retains each scenario's last observed
+outcome and pass/fail state, and writes one tenant-scoped governance audit event
+per suite run.
 
 Production channel safeguards:
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 import { defaultActor } from "./context";
+import { MAX_POLICY_TEST_SCENARIOS } from "./policy-validation";
 
 import type {
   ApprovalAction,
@@ -16,6 +17,7 @@ import type {
   DataRevision,
   PolicyRecord,
   PolicyRevision,
+  PolicyTestScenario,
   RolloutState
 } from "./types";
 
@@ -26,6 +28,7 @@ const DATA_FILE = path.join(DATA_DIR, "control-plane.json");
 
 const initialData: ControlPlaneData = {
   policies: [],
+  policyTestScenarios: [],
   auditEvents: [],
   policyRevisions: [],
   dataRevisions: [],
@@ -37,6 +40,7 @@ const initialData: ControlPlaneData = {
 function normalizeData(data: Partial<ControlPlaneData> | undefined): ControlPlaneData {
   return {
     policies: data?.policies ?? [],
+    policyTestScenarios: data?.policyTestScenarios ?? [],
     auditEvents: data?.auditEvents ?? [],
     policyRevisions: data?.policyRevisions ?? [],
     dataRevisions: data?.dataRevisions ?? [],
@@ -68,6 +72,89 @@ export async function listPolicies(): Promise<PolicyRecord[]> {
 export async function getPolicy(id: string): Promise<PolicyRecord | undefined> {
   const data = await readData();
   return data.policies.find((policy) => policy.id === id);
+}
+
+export async function listPolicyTestScenarios(policyId: string): Promise<PolicyTestScenario[]> {
+  const data = await readData();
+  return data.policyTestScenarios
+    .filter((scenario) => scenario.policyId === policyId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function createPolicyTestScenario(
+  input: Omit<
+    PolicyTestScenario,
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "lastRunAt"
+    | "lastObservedOutcome"
+    | "lastPassed"
+    | "lastError"
+  >
+): Promise<PolicyTestScenario> {
+  const data = await readData();
+  const policyScenarios = data.policyTestScenarios.filter(
+    (scenario) => scenario.policyId === input.policyId
+  );
+  if (policyScenarios.length >= MAX_POLICY_TEST_SCENARIOS) {
+    throw new Error(`scenario limit of ${MAX_POLICY_TEST_SCENARIOS} reached`);
+  }
+  if (
+    policyScenarios.some((scenario) => scenario.name === input.name)
+  ) {
+    throw new Error("scenario name already exists");
+  }
+  const now = new Date().toISOString();
+  const scenario: PolicyTestScenario = {
+    ...input,
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now
+  };
+  data.policyTestScenarios.push(scenario);
+  await writeData(data);
+  return scenario;
+}
+
+export async function deletePolicyTestScenario(
+  policyId: string,
+  scenarioId: string
+): Promise<boolean> {
+  const data = await readData();
+  const before = data.policyTestScenarios.length;
+  data.policyTestScenarios = data.policyTestScenarios.filter(
+    (scenario) => scenario.policyId !== policyId || scenario.id !== scenarioId
+  );
+  if (data.policyTestScenarios.length === before) {
+    return false;
+  }
+  await writeData(data);
+  return true;
+}
+
+export async function recordPolicyTestScenarioResults(
+  policyId: string,
+  results: Array<{
+    scenarioId: string;
+    observedOutcome: NonNullable<PolicyTestScenario["lastObservedOutcome"]>;
+    passed: boolean;
+    error?: string;
+  }>
+): Promise<void> {
+  const data = await readData();
+  const now = new Date().toISOString();
+  const byID = new Map(results.map((result) => [result.scenarioId, result]));
+  for (const scenario of data.policyTestScenarios) {
+    const result = scenario.policyId === policyId ? byID.get(scenario.id) : undefined;
+    if (!result) continue;
+    scenario.lastRunAt = now;
+    scenario.lastObservedOutcome = result.observedOutcome;
+    scenario.lastPassed = result.passed;
+    scenario.lastError = result.error;
+    scenario.updatedAt = now;
+  }
+  await writeData(data);
 }
 
 export async function upsertPolicy(input: Omit<PolicyRecord, "createdAt" | "updatedAt">): Promise<PolicyRecord> {
@@ -115,6 +202,9 @@ export async function deletePolicy(id: string): Promise<boolean> {
   if (data.policies.length == before) {
     return false;
   }
+  data.policyTestScenarios = data.policyTestScenarios.filter(
+    (scenario) => scenario.policyId !== id
+  );
   await writeData(data);
   await appendAuditEvent({
     action: "policy_deleted",

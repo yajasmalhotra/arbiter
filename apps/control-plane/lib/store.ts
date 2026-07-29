@@ -18,6 +18,7 @@ import tar from "tar-stream";
 
 import { currentControlPlaneRequestContext, defaultActor, defaultTenantId } from "./context";
 import { dbEnabled, ensureMigrations, getPool } from "./db";
+import { MAX_POLICY_TEST_SCENARIOS } from "./policy-validation";
 import * as legacy from "./store_legacy";
 import type {
   ApprovalAction,
@@ -31,6 +32,7 @@ import type {
   DataRevision,
   PolicyRecord,
   PolicyRevision,
+  PolicyTestScenario,
   RuntimeDecisionEvent,
   RuntimeDecisionSummary,
   RolloutState,
@@ -59,6 +61,28 @@ function policyFromRow(row: Record<string, unknown>): PolicyRecord {
     rules: asObject(row.rules),
     createdAt: toISOString(row.created_at),
     updatedAt: toISOString(row.updated_at)
+  };
+}
+
+function policyTestScenarioFromRow(row: Record<string, unknown>): PolicyTestScenario {
+  return {
+    id: String(row.id),
+    policyId: String(row.policy_id),
+    name: String(row.name),
+    interceptPath: String(row.intercept_path),
+    payload: row.payload,
+    expectedOutcome: String(row.expected_outcome) as PolicyTestScenario["expectedOutcome"],
+    createdBy: String(row.created_by),
+    createdAt: toISOString(row.created_at),
+    updatedAt: toISOString(row.updated_at),
+    lastRunAt: row.last_run_at ? toISOString(row.last_run_at) : undefined,
+    lastObservedOutcome: row.last_observed_outcome
+      ? (String(row.last_observed_outcome) as PolicyTestScenario["lastObservedOutcome"])
+      : undefined,
+    lastPassed: row.last_passed === null || row.last_passed === undefined
+      ? undefined
+      : Boolean(row.last_passed),
+    lastError: row.last_error ? String(row.last_error) : undefined
   };
 }
 
@@ -1334,6 +1358,213 @@ export async function getPolicy(id: string): Promise<PolicyRecord | undefined> {
       return policyFromRow(result.rows[0] as Record<string, unknown>);
     },
     async () => legacy.getPolicy(id)
+  );
+}
+
+export async function listPolicyTestScenarios(policyId: string): Promise<PolicyTestScenario[]> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, policy_id, name, intercept_path, payload, expected_outcome,
+                 created_by, created_at, updated_at, last_run_at,
+                 last_observed_outcome, last_passed, last_error
+          FROM policy_test_scenarios
+          WHERE tenant_id = $1 AND policy_id = $2
+          ORDER BY updated_at DESC
+        `,
+        [defaultTenantId(), policyId]
+      );
+      return result.rows.map((row) =>
+        policyTestScenarioFromRow(row as Record<string, unknown>)
+      );
+    },
+    async () => legacy.listPolicyTestScenarios(policyId)
+  );
+}
+
+export async function createPolicyTestScenario(
+  input: Omit<
+    PolicyTestScenario,
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "lastRunAt"
+    | "lastObservedOutcome"
+    | "lastPassed"
+    | "lastError"
+  >
+): Promise<PolicyTestScenario> {
+  return withDbOrFallback(
+    async (db) => {
+      const now = new Date().toISOString();
+      const tenantID = defaultTenantId();
+      const actor = authoritativeActor(input.createdBy);
+      const client = await db.connect();
+      let scenario: PolicyTestScenario;
+      try {
+        await client.query("BEGIN");
+        const policy = await client.query(
+          "SELECT 1 FROM policies WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+          [tenantID, input.policyId]
+        );
+        if (!policy.rowCount) {
+          throw new Error("policy not found");
+        }
+        const count = await client.query(
+          "SELECT COUNT(*)::int AS count FROM policy_test_scenarios WHERE tenant_id = $1 AND policy_id = $2",
+          [tenantID, input.policyId]
+        );
+        if (Number(count.rows[0]?.count ?? 0) >= MAX_POLICY_TEST_SCENARIOS) {
+          throw new Error(`scenario limit of ${MAX_POLICY_TEST_SCENARIOS} reached`);
+        }
+        const result = await client.query(
+          `
+            INSERT INTO policy_test_scenarios (
+              id, tenant_id, policy_id, name, intercept_path, payload,
+              expected_outcome, created_by, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $9)
+            RETURNING id, policy_id, name, intercept_path, payload, expected_outcome,
+                      created_by, created_at, updated_at, last_run_at,
+                      last_observed_outcome, last_passed, last_error
+          `,
+          [
+            randomUUID(),
+            tenantID,
+            input.policyId,
+            input.name,
+            input.interceptPath,
+            JSON.stringify(input.payload),
+            input.expectedOutcome,
+            actor,
+            now
+          ]
+        );
+        scenario = policyTestScenarioFromRow(result.rows[0] as Record<string, unknown>);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      await appendAuditEvent({
+        action: "policy_test_scenario_created",
+        actor,
+        policyId: input.policyId,
+        metadata: {
+          scenarioId: scenario.id,
+          expectedOutcome: scenario.expectedOutcome,
+          interceptPath: scenario.interceptPath
+        }
+      });
+      return scenario;
+    },
+    async () => {
+      const scenario = await legacy.createPolicyTestScenario({
+        ...input,
+        createdBy: authoritativeActor(input.createdBy)
+      });
+      await legacy.appendAuditEvent({
+        action: "policy_test_scenario_created",
+        actor: authoritativeActor(input.createdBy),
+        policyId: input.policyId,
+        metadata: {
+          scenarioId: scenario.id,
+          expectedOutcome: scenario.expectedOutcome,
+          interceptPath: scenario.interceptPath
+        }
+      });
+      return scenario;
+    }
+  );
+}
+
+export async function deletePolicyTestScenario(
+  policyId: string,
+  scenarioId: string
+): Promise<boolean> {
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          DELETE FROM policy_test_scenarios
+          WHERE tenant_id = $1 AND policy_id = $2 AND id = $3
+        `,
+        [defaultTenantId(), policyId, scenarioId]
+      );
+      if (!result.rowCount) return false;
+      await appendAuditEvent({
+        action: "policy_test_scenario_deleted",
+        actor: defaultActor(),
+        policyId,
+        metadata: { scenarioId }
+      });
+      return true;
+    },
+    async () => {
+      const deleted = await legacy.deletePolicyTestScenario(policyId, scenarioId);
+      if (deleted) {
+        await legacy.appendAuditEvent({
+          action: "policy_test_scenario_deleted",
+          actor: defaultActor(),
+          policyId,
+          metadata: { scenarioId }
+        });
+      }
+      return deleted;
+    }
+  );
+}
+
+export async function recordPolicyTestScenarioResults(
+  policyId: string,
+  results: Array<{
+    scenarioId: string;
+    observedOutcome: NonNullable<PolicyTestScenario["lastObservedOutcome"]>;
+    passed: boolean;
+    error?: string;
+  }>
+): Promise<void> {
+  return withDbOrFallback(
+    async (db) => {
+      if (!results.length) return;
+      const now = new Date().toISOString();
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        for (const result of results) {
+          await client.query(
+            `
+              UPDATE policy_test_scenarios
+              SET last_run_at = $1,
+                  last_observed_outcome = $2,
+                  last_passed = $3,
+                  last_error = $4,
+                  updated_at = $1
+              WHERE tenant_id = $5 AND policy_id = $6 AND id = $7
+            `,
+            [
+              now,
+              result.observedOutcome,
+              result.passed,
+              result.error ?? null,
+              defaultTenantId(),
+              policyId,
+              result.scenarioId
+            ]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async () => legacy.recordPolicyTestScenarioResults(policyId, results)
   );
 }
 

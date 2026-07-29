@@ -375,6 +375,8 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
   changes) before an operator requests a promotion.
 - Policy detail pages can assert an expected allow or deny outcome against the
   connected interceptor and report a clear pass/fail result.
+- Teams can save bounded, tenant-scoped policy regression suites and retain
+  last-run pass/fail evidence for rollout review.
 - Production approval uses separation of duties: the requester cannot approve their own rollout or rollback.
 - The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
 - The control plane supports signed, tenant-scoped operator identities with

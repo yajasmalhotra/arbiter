@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { classifyPolicyTestOutcome, policyTestAssertion } from "./policy-validation";
+import {
+  classifyPolicyTestOutcome,
+  executePolicyValidation,
+  isPolicyTestInterceptPath,
+  policyTestAssertion
+} from "./policy-validation";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe("policy validation outcomes", () => {
   it("prefers the signed decision body over transport status", () => {
@@ -17,5 +27,61 @@ describe("policy validation outcomes", () => {
       observed: "error",
       passed: false
     });
+  });
+
+  it("only accepts supported interceptor routes", () => {
+    expect(isPolicyTestInterceptPath("/v1/intercept/openai")).toBe(true);
+    expect(isPolicyTestInterceptPath("http://metadata.internal/")).toBe(false);
+  });
+
+  it("sends configured service credentials to the configured interceptor", async () => {
+    vi.stubEnv("ARBITER_URL", "https://arbiter.example/");
+    vi.stubEnv("ARBITER_POLICY_TEST_GATEWAY_KEY", "gateway-key");
+    vi.stubEnv("ARBITER_POLICY_TEST_BEARER_TOKEN", "service-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ decision: { allow: false } }), { status: 403 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const execution = await executePolicyValidation({
+      interceptPath: "/v1/intercept/openai",
+      payload: { request: "test" },
+      expectedOutcome: "deny"
+    });
+
+    expect(execution.observedOutcome).toBe("deny");
+    expect(execution.assertion?.passed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://arbiter.example/v1/intercept/openai",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer service-token",
+          "X-Arbiter-Gateway-Key": "gateway-key"
+        })
+      })
+    );
+  });
+
+  it("does not forward service credentials to an explicit override", async () => {
+    vi.stubEnv("ARBITER_POLICY_TEST_GATEWAY_KEY", "gateway-key");
+    vi.stubEnv("ARBITER_POLICY_TEST_BEARER_TOKEN", "service-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ decision: { allow: true } }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await executePolicyValidation({
+      interceptPath: "/v1/intercept/openai",
+      payload: {},
+      baseUrl: "http://127.0.0.1:9000",
+      useServerCredentials: false
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9000/v1/intercept/openai",
+      expect.objectContaining({
+        headers: { "Content-Type": "application/json" }
+      })
+    );
   });
 });
