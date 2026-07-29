@@ -1,4 +1,13 @@
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  createPrivateKey,
+  randomBytes,
+  randomUUID,
+  sign as signDetached
+} from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -15,6 +24,7 @@ import type {
   ApprovalRequest,
   ApprovalState,
   AuditEvent,
+  AuditIntegrityReport,
   BundleActivation,
   BundleArtifact,
   CapabilityGrant,
@@ -33,7 +43,7 @@ type BundleChannel = "dev" | "staging" | "prod";
 
 // Request-local signed identity always wins over a caller-supplied actor. The
 // optional input remains for trusted server-side and legacy callers only.
-function authoritativeActor(candidate?: string): string {
+export function authoritativeActor(candidate?: string): string {
   return currentControlPlaneRequestContext()?.actor ?? (candidate?.trim() || defaultActor());
 }
 
@@ -77,12 +87,13 @@ function serviceTokenFromRow(row: Record<string, unknown>): ServiceToken {
 }
 
 function signingKeyFromRow(row: Record<string, unknown>): SigningKey {
+  const algorithm = parseBundleSigningAlgorithm(row.algorithm);
   return {
     id: String(row.id),
     name: String(row.name),
     keyId: String(row.key_id),
     scope: String(row.scope),
-    algorithm: "HS256",
+    algorithm,
     isActive: Boolean(row.is_active),
     createdBy: String(row.created_by),
     createdAt: toISOString(row.created_at),
@@ -169,6 +180,47 @@ function stableStringify(value: unknown): string {
     .join(",")}}`;
 }
 
+type AuditChainEvent = Pick<AuditEvent, "id" | "action" | "actor" | "policyId" | "at" | "metadata" | "previousHash" | "eventHash">;
+
+// Hashes bind a tenant and the preceding event hash to every immutable audit
+// payload. Stable serialization ensures Postgres JSONB key ordering cannot
+// change the evidence after persistence.
+export function auditEventHash(tenantID: string, event: Omit<AuditChainEvent, "eventHash">): string {
+  return createHash("sha256").update(stableStringify({
+    version: 1,
+    tenant_id: tenantID,
+    previous_hash: event.previousHash ?? null,
+    id: event.id,
+    action: event.action,
+    actor: event.actor,
+    policy_id: event.policyId ?? null,
+    at: event.at,
+    metadata: event.metadata ?? {}
+  })).digest("hex");
+}
+
+export function verifyAuditChain(tenantID: string, events: AuditChainEvent[]): AuditIntegrityReport {
+  let previousHash: string | undefined;
+  let checkedEvents = 0;
+  let unsealedLegacyEvents = 0;
+  for (const event of events) {
+    if (!event.eventHash) {
+      unsealedLegacyEvents += 1;
+      continue;
+    }
+    if (event.previousHash !== previousHash) {
+      return { verified: false, checkedEvents, unsealedLegacyEvents, latestHash: previousHash, failure: `chain link mismatch at ${event.id}` };
+    }
+    const expected = auditEventHash(tenantID, event);
+    if (event.eventHash !== expected) {
+      return { verified: false, checkedEvents, unsealedLegacyEvents, latestHash: previousHash, failure: `event hash mismatch at ${event.id}` };
+    }
+    previousHash = event.eventHash;
+    checkedEvents += 1;
+  }
+  return { verified: checkedEvents > 0, checkedEvents, unsealedLegacyEvents, latestHash: previousHash };
+}
+
 function bundleDigest(snapshot: BundleArtifact["snapshot"]): string {
   return createHash("sha256").update(stableStringify(snapshot)).digest("hex");
 }
@@ -218,6 +270,15 @@ type ReviewApprovalRequestInput = {
   notes?: string;
 };
 
+export function assertIndependentApprovalReviewer(
+  request: Pick<ApprovalRequest, "channel" | "requestedBy">,
+  reviewer: string
+): void {
+  if (request.channel === "prod" && request.requestedBy === reviewer) {
+    throw new Error("production approval must be reviewed by a different actor than the requester");
+  }
+}
+
 type BundleManifest = {
   channel: BundleChannel;
   bundleId: string;
@@ -227,7 +288,7 @@ type BundleManifest = {
   artifactPath: string;
   signingKeyID: string;
   signingScope: string;
-  signingAlgorithm: "HS256";
+  signingAlgorithm: BundleSigningAlgorithm;
   generatedAt: string;
 };
 
@@ -238,12 +299,155 @@ type ValidatedServiceToken = {
   tenantId: string;
 };
 
+type BundleSigningAlgorithm = "HS256" | "RS256";
+
 type BundleSigningConfig = {
   keyID: string;
   scope: string;
-  secret: string;
-  algorithm: "HS256";
+  secret?: string;
+  algorithm: BundleSigningAlgorithm;
+  externalSigner?: ExternalBundleSigner;
 };
+
+type ExternalBundleSigner = {
+  url: string;
+  token?: string;
+  timeoutMs: number;
+};
+
+const SIGNING_KEY_ENCRYPTION_PREFIX = "arbiter-signing-key:v1";
+
+function signingKeyEncryptionRequired(): boolean {
+  const configured = process.env.ARBITER_REQUIRE_SIGNING_KEY_ENCRYPTION?.trim().toLowerCase();
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
+function signingKeyEncryptionKey(): Buffer | undefined {
+  const encoded = process.env.ARBITER_SIGNING_KEY_ENCRYPTION_KEY?.trim();
+  if (!encoded) {
+    if (signingKeyEncryptionRequired()) {
+      throw new Error("ARBITER_SIGNING_KEY_ENCRYPTION_KEY is required when signing-key encryption is enforced");
+    }
+    return undefined;
+  }
+  const key = Buffer.from(encoded, "base64");
+  if (key.length !== 32) {
+    throw new Error("ARBITER_SIGNING_KEY_ENCRYPTION_KEY must decode to exactly 32 bytes");
+  }
+  return key;
+}
+
+function signingKeyEncryptionAAD(tenantID: string, keyID: string): Buffer {
+  return Buffer.from(`${SIGNING_KEY_ENCRYPTION_PREFIX}:${tenantID}:${keyID}`, "utf8");
+}
+
+export function encryptSigningKeySecret(secret: string, encryptionKey: Buffer, tenantID: string, keyID: string): string {
+  if (encryptionKey.length !== 32) {
+    throw new Error("signing-key encryption key must be 32 bytes");
+  }
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey, iv);
+  cipher.setAAD(signingKeyEncryptionAAD(tenantID, keyID));
+  const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${SIGNING_KEY_ENCRYPTION_PREFIX}:${toBase64URL(iv)}:${toBase64URL(tag)}:${toBase64URL(ciphertext)}`;
+}
+
+export function decryptSigningKeySecret(stored: string, encryptionKey: Buffer, tenantID: string, keyID: string): string {
+  const parts = stored.split(":");
+  if (parts.length !== 5 || `${parts[0]}:${parts[1]}` !== SIGNING_KEY_ENCRYPTION_PREFIX) {
+    throw new Error("invalid encrypted signing-key secret format");
+  }
+  if (encryptionKey.length !== 32) {
+    throw new Error("signing-key encryption key must be 32 bytes");
+  }
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", encryptionKey, fromBase64URL(parts[2]));
+    decipher.setAAD(signingKeyEncryptionAAD(tenantID, keyID));
+    decipher.setAuthTag(fromBase64URL(parts[3]));
+    return Buffer.concat([decipher.update(fromBase64URL(parts[4])), decipher.final()]).toString("utf8");
+  } catch {
+    throw new Error("unable to decrypt signing key secret");
+  }
+}
+
+function isEncryptedSigningKeySecret(value: string): boolean {
+  return value.startsWith(`${SIGNING_KEY_ENCRYPTION_PREFIX}:`);
+}
+
+function storeSigningKeySecret(secret: string, tenantID: string, keyID: string): string {
+  const encryptionKey = signingKeyEncryptionKey();
+  return encryptionKey ? encryptSigningKeySecret(secret, encryptionKey, tenantID, keyID) : secret;
+}
+
+function loadSigningKeySecret(stored: string, tenantID: string, keyID: string): string {
+  if (!isEncryptedSigningKeySecret(stored)) {
+    if (signingKeyEncryptionRequired()) {
+      throw new Error("unencrypted signing-key secret found while encryption is enforced; rotate this key");
+    }
+    return stored;
+  }
+  const encryptionKey = signingKeyEncryptionKey();
+  if (!encryptionKey) {
+    throw new Error("ARBITER_SIGNING_KEY_ENCRYPTION_KEY is required to decrypt the active signing key");
+  }
+  return decryptSigningKeySecret(stored, encryptionKey, tenantID, keyID);
+}
+
+function parseBundleSigningAlgorithm(value: unknown): BundleSigningAlgorithm {
+  if (value === "HS256" || value === "RS256") {
+    return value;
+  }
+  throw new Error("bundle signing algorithm must be HS256 or RS256");
+}
+
+function validateSigningSecret(algorithm: BundleSigningAlgorithm, secret: string): void {
+  if (!secret) {
+    throw new Error("bundle signing secret is required");
+  }
+  if (algorithm !== "RS256") {
+    return;
+  }
+
+  try {
+    const key = createPrivateKey(secret);
+    if (key.asymmetricKeyType !== "rsa") {
+      throw new Error("not an RSA private key");
+    }
+  } catch {
+    throw new Error("RS256 bundle signing secret must be a PEM-encoded RSA private key");
+  }
+}
+
+function externalBundleSignerConfig(): ExternalBundleSigner | undefined {
+  const rawURL = process.env.ARBITER_BUNDLE_SIGNER_URL?.trim();
+  if (!rawURL) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(rawURL);
+  } catch {
+    throw new Error("ARBITER_BUNDLE_SIGNER_URL must be an absolute URL");
+  }
+  if (url.protocol !== "https:" && process.env.NODE_ENV === "production") {
+    throw new Error("ARBITER_BUNDLE_SIGNER_URL must use HTTPS in production");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("ARBITER_BUNDLE_SIGNER_URL must use HTTP or HTTPS");
+  }
+  const configuredTimeout = Number.parseInt(process.env.ARBITER_BUNDLE_SIGNER_TIMEOUT_MS ?? "3000", 10);
+  if (!Number.isFinite(configuredTimeout) || configuredTimeout < 100 || configuredTimeout > 30_000) {
+    throw new Error("ARBITER_BUNDLE_SIGNER_TIMEOUT_MS must be between 100 and 30000 milliseconds");
+  }
+  return {
+    url: url.toString(),
+    token: process.env.ARBITER_BUNDLE_SIGNER_TOKEN?.trim() || undefined,
+    timeoutMs: configuredTimeout
+  };
+}
 
 function normalizeScopes(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
@@ -262,17 +466,28 @@ function tokenHash(rawToken: string): string {
 }
 
 function bundleSigningConfig(): BundleSigningConfig {
-  const keyID = (process.env.ARBITER_BUNDLE_SIGNING_KEY_ID ?? "arbiter_bundle_hs256").trim();
+  const algorithm = parseBundleSigningAlgorithm((process.env.ARBITER_BUNDLE_SIGNING_ALGORITHM ?? "HS256").trim());
+  const keyID = (process.env.ARBITER_BUNDLE_SIGNING_KEY_ID ?? `arbiter_bundle_${algorithm.toLowerCase()}`).trim();
   const scope = (process.env.ARBITER_BUNDLE_SIGNING_SCOPE ?? "read").trim();
-  const secret = (process.env.ARBITER_BUNDLE_SIGNING_SECRET ?? "dev-bundle-signing-secret").trim();
-  if (!secret) {
-    throw new Error("bundle signing secret is required");
+  const externalSigner = externalBundleSignerConfig();
+  if (externalSigner) {
+    if (algorithm !== "RS256") {
+      throw new Error("external bundle signing requires ARBITER_BUNDLE_SIGNING_ALGORITHM=RS256");
+    }
+    return {
+      keyID: keyID || "arbiter_bundle_rs256",
+      scope: scope || "read",
+      algorithm,
+      externalSigner
+    };
   }
+  const secret = (process.env.ARBITER_BUNDLE_SIGNING_SECRET ?? "dev-bundle-signing-secret").trim();
+  validateSigningSecret(algorithm, secret);
   return {
-    keyID: keyID || "arbiter_bundle_hs256",
+    keyID: keyID || `arbiter_bundle_${algorithm.toLowerCase()}`,
     scope: scope || "read",
     secret,
-    algorithm: "HS256"
+    algorithm
   };
 }
 
@@ -293,53 +508,39 @@ function missingPolicyTreeError(root: string, err: unknown): Error {
 
 async function ensureBootstrapSigningKey(db: Pool): Promise<void> {
   const bootstrap = bundleSigningConfig();
+  if (bootstrap.externalSigner) {
+    return;
+  }
   const now = new Date().toISOString();
+  const tenantID = defaultTenantId();
   await db.query(
     `
       INSERT INTO signing_keys (
         id, tenant_id, name, key_id, scope, algorithm, secret, is_active, created_by, created_at, activated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9, $10)
-      ON CONFLICT (tenant_id, key_id) DO UPDATE
-      SET
-        name = EXCLUDED.name,
-        scope = EXCLUDED.scope,
-        algorithm = EXCLUDED.algorithm,
-        secret = EXCLUDED.secret,
-        is_active = TRUE,
-        revoked_at = NULL,
-        activated_at = COALESCE(signing_keys.activated_at, EXCLUDED.activated_at)
+      ON CONFLICT (tenant_id, key_id) DO NOTHING
     `,
     [
       "sk_bootstrap",
-      defaultTenantId(),
+      tenantID,
       "bootstrap-bundle-signing-key",
       bootstrap.keyID,
       bootstrap.scope,
       bootstrap.algorithm,
-      bootstrap.secret,
+      storeSigningKeySecret(bootstrap.secret ?? "", tenantID, bootstrap.keyID),
       defaultActor(),
       now,
       now
     ]
   );
-  await db.query(
-    `
-      UPDATE signing_keys
-      SET is_active = FALSE
-      WHERE tenant_id = $1 AND id <> (
-        SELECT id
-        FROM signing_keys
-        WHERE tenant_id = $1 AND key_id = $2
-        LIMIT 1
-      ) AND is_active = TRUE
-    `,
-    [defaultTenantId(), bootstrap.keyID]
-  );
 }
 
 async function resolveBundleSigningConfig(): Promise<BundleSigningConfig> {
   const fallback = bundleSigningConfig();
+  if (fallback.externalSigner) {
+    return fallback;
+  }
   if (!dbEnabled()) {
     return fallback;
   }
@@ -359,14 +560,15 @@ async function resolveBundleSigningConfig(): Promise<BundleSigningConfig> {
     [defaultTenantId()]
   );
   if (!result.rowCount) {
-    return fallback;
+    throw new Error("no active bundle signing key is available for this tenant");
   }
   const row = result.rows[0] as Record<string, unknown>;
+  const keyID = String(row.key_id);
   return {
-    keyID: String(row.key_id),
+    keyID,
     scope: String(row.scope),
-    secret: String(row.secret),
-    algorithm: "HS256"
+    secret: loadSigningKeySecret(String(row.secret), defaultTenantId(), keyID),
+    algorithm: parseBundleSigningAlgorithm(row.algorithm)
   };
 }
 
@@ -588,14 +790,33 @@ export async function revokeServiceToken(id: string): Promise<ServiceToken | und
   );
 }
 
-function capabilitySigningConfig(): { keyID: string; secret: string; issuer: string; audience: string } {
-  const secret = (process.env.ARBITER_CAPABILITY_SECRET ?? "").trim();
+type CapabilitySigningConfig = {
+  keyID: string;
+  secret: string;
+  algorithm: BundleSigningAlgorithm;
+  issuer: string;
+  audience: string;
+};
+
+function capabilitySigningConfig(): CapabilitySigningConfig {
+  const algorithm = parseBundleSigningAlgorithm((process.env.ARBITER_CAPABILITY_ALGORITHM ?? "HS256").trim());
+  const secret = (
+    algorithm === "RS256"
+      ? process.env.ARBITER_CAPABILITY_PRIVATE_KEY
+      : process.env.ARBITER_CAPABILITY_SECRET
+  )?.trim() ?? "";
   if (!secret) {
-    throw new Error("ARBITER_CAPABILITY_SECRET is required to issue capability grants");
+    throw new Error(
+      algorithm === "RS256"
+        ? "ARBITER_CAPABILITY_PRIVATE_KEY is required to issue RS256 capability grants"
+        : "ARBITER_CAPABILITY_SECRET is required to issue capability grants"
+    );
   }
+  validateSigningSecret(algorithm, secret);
   return {
     keyID: (process.env.ARBITER_CAPABILITY_KID ?? "default").trim() || "default",
     secret,
+    algorithm,
     issuer: (process.env.ARBITER_CAPABILITY_ISSUER ?? "arbiter").trim() || "arbiter",
     audience: (process.env.ARBITER_CAPABILITY_AUDIENCE ?? "arbiter-capability").trim() || "arbiter-capability"
   };
@@ -605,9 +826,9 @@ function base64url(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
 
-function signCapabilityGrant(grant: CapabilityGrant): string {
+export function signCapabilityGrant(grant: CapabilityGrant): string {
   const signing = capabilitySigningConfig();
-  const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT", kid: signing.keyID }));
+  const header = base64url(JSON.stringify({ alg: signing.algorithm, typ: "JWT", kid: signing.keyID }));
   const now = Math.floor(Date.now() / 1000);
   const payload = base64url(
     JSON.stringify({
@@ -628,7 +849,10 @@ function signCapabilityGrant(grant: CapabilityGrant): string {
     })
   );
   const signingInput = `${header}.${payload}`;
-  const signature = createHmac("sha256", signing.secret).update(signingInput).digest("base64url");
+  const signature =
+    signing.algorithm === "HS256"
+      ? createHmac("sha256", signing.secret).update(signingInput).digest("base64url")
+      : signDetached("RSA-SHA256", Buffer.from(signingInput, "utf8"), signing.secret).toString("base64url");
   return `${signingInput}.${signature}`;
 }
 
@@ -784,6 +1008,7 @@ type CreateSigningKeyInput = {
   secret: string;
   keyId?: string;
   scope?: string;
+  algorithm?: BundleSigningAlgorithm;
   actor?: string;
   activate?: boolean;
 };
@@ -835,6 +1060,8 @@ export async function createSigningKey(input: CreateSigningKeyInput): Promise<Si
   }
   const keyId = input.keyId?.trim() || `skid_${randomUUID()}`;
   const scope = input.scope?.trim() || "read";
+  const algorithm = parseBundleSigningAlgorithm(input.algorithm ?? "HS256");
+  validateSigningSecret(algorithm, secret);
   const activate = Boolean(input.activate);
   const actor = authoritativeActor(input.actor);
 
@@ -862,10 +1089,22 @@ export async function createSigningKey(input: CreateSigningKeyInput): Promise<Si
             INSERT INTO signing_keys (
               id, tenant_id, name, key_id, scope, algorithm, secret, is_active, created_by, created_at, activated_at
             )
-            VALUES ($1, $2, $3, $4, $5, 'HS256', $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, name, key_id, scope, algorithm, is_active, created_by, created_at, activated_at, revoked_at
           `,
-          [id, defaultTenantId(), name, keyId, scope, secret, activate, actor, now, activate ? now : null]
+          [
+            id,
+            defaultTenantId(),
+            name,
+            keyId,
+            scope,
+            algorithm,
+            storeSigningKeySecret(secret, defaultTenantId(), keyId),
+            activate,
+            actor,
+            now,
+            activate ? now : null
+          ]
         );
         created = signingKeyFromRow(result.rows[0] as Record<string, unknown>);
         await client.query("COMMIT");
@@ -1196,7 +1435,7 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
     async (db) => {
       const result = await db.query(
         `
-          SELECT id, action, actor, policy_id, at, metadata
+          SELECT id, action, actor, policy_id, at, metadata, previous_hash, event_hash
           FROM audit_events
           WHERE tenant_id = $1
           ORDER BY at DESC
@@ -1211,7 +1450,9 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
           actor: String(record.actor),
           policyId: record.policy_id ? String(record.policy_id) : undefined,
           at: toISOString(record.at),
-          metadata: asObject(record.metadata)
+          metadata: asObject(record.metadata),
+          previousHash: record.previous_hash ? String(record.previous_hash) : undefined,
+          eventHash: record.event_hash ? String(record.event_hash) : undefined
         };
       });
     },
@@ -1222,29 +1463,56 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
 export async function appendAuditEvent(event: Omit<AuditEvent, "id" | "at">): Promise<AuditEvent> {
   return withDbOrFallback(
     async (db) => {
+      const tenantID = defaultTenantId();
       const created: AuditEvent = {
         ...event,
         id: randomUUID(),
         at: new Date().toISOString()
       };
-      await db.query(
-        `
-          INSERT INTO audit_events (id, tenant_id, action, actor, policy_id, at, metadata)
-          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-        `,
-        [
-          created.id,
-          defaultTenantId(),
-          created.action,
-          created.actor,
-          created.policyId ?? null,
-          created.at,
-          JSON.stringify(created.metadata ?? {})
-        ]
-      );
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [tenantID]);
+        const previous = await client.query(
+          `SELECT event_hash FROM audit_events WHERE tenant_id = $1 AND event_hash IS NOT NULL ORDER BY at DESC, id DESC LIMIT 1`,
+          [tenantID]
+        );
+        created.previousHash = previous.rowCount ? String((previous.rows[0] as Record<string, unknown>).event_hash) : undefined;
+        created.eventHash = auditEventHash(tenantID, created);
+        await client.query(
+          `
+            INSERT INTO audit_events (id, tenant_id, action, actor, policy_id, at, metadata, previous_hash, event_hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+          `,
+          [created.id, tenantID, created.action, created.actor, created.policyId ?? null, created.at, JSON.stringify(created.metadata ?? {}), created.previousHash ?? null, created.eventHash]
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
       return created;
     },
     async () => legacy.appendAuditEvent(event)
+  );
+}
+
+export async function verifyAuditIntegrity(): Promise<AuditIntegrityReport> {
+  return withDbOrFallback(
+    async (db) => {
+      const tenantID = defaultTenantId();
+      const result = await db.query(
+        `SELECT id, action, actor, policy_id, at, metadata, previous_hash, event_hash FROM audit_events WHERE tenant_id = $1 ORDER BY at ASC, id ASC`,
+        [tenantID]
+      );
+      return verifyAuditChain(tenantID, result.rows.map((row) => {
+        const record = row as Record<string, unknown>;
+        return { id: String(record.id), action: String(record.action), actor: String(record.actor), policyId: record.policy_id ? String(record.policy_id) : undefined, at: toISOString(record.at), metadata: asObject(record.metadata), previousHash: record.previous_hash ? String(record.previous_hash) : undefined, eventHash: record.event_hash ? String(record.event_hash) : undefined };
+      }));
+    },
+    async (): Promise<AuditIntegrityReport> => ({ verified: false, checkedEvents: 0, unsealedLegacyEvents: (await legacy.listAuditEvents()).length, failure: "audit integrity verification requires Postgres" })
   );
 }
 
@@ -1412,10 +1680,10 @@ export async function listBundleActivations(): Promise<BundleActivation[]> {
 }
 
 export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
+  const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
       const now = new Date().toISOString();
-      const actor = authoritativeActor(input.actor);
       const tenant = defaultTenantId();
 
       const selectedPoliciesResult = input.policyIds?.length
@@ -1526,7 +1794,7 @@ export async function publishBundle(input: PublishBundleInput = {}): Promise<Bun
 
       return bundle;
     },
-    async () => legacy.publishBundle(input)
+    async () => legacy.publishBundle({ ...input, actor })
   );
 }
 
@@ -1659,11 +1927,11 @@ export async function promoteBundle(
   if (!CHANNELS.has(channel)) {
     throw new Error(`invalid channel: ${channel}`);
   }
+  const actor = authoritativeActor(input.actor);
 
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = authoritativeActor(input.actor);
 
       const client = await db.connect();
       let promoted: BundleArtifact | undefined;
@@ -1696,7 +1964,7 @@ export async function promoteBundle(
       if (channel !== "prod") {
         return undefined;
       }
-      return legacy.activateBundle(bundleID, input);
+      return legacy.activateBundle(bundleID, { ...input, actor });
     }
   );
 }
@@ -1785,11 +2053,11 @@ export async function rollbackChannel(
   if (!CHANNELS.has(channel)) {
     throw new Error(`invalid channel: ${channel}`);
   }
+  const actor = authoritativeActor(input.actor);
 
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = authoritativeActor(input.actor);
 
       const client = await db.connect();
       let restored: BundleArtifact | undefined;
@@ -1818,7 +2086,7 @@ export async function rollbackChannel(
 
       return restored;
     },
-    async () => legacy.rollbackChannel(channel, input)
+    async () => legacy.rollbackChannel(channel, { ...input, actor })
   );
 }
 
@@ -1858,11 +2126,11 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
   if (input.channel !== "prod") {
     throw new Error("approval workflow is only required for production");
   }
+  const actor = authoritativeActor(input.actor);
 
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = authoritativeActor(input.actor);
       const notes = input.notes?.trim() || undefined;
       const now = new Date().toISOString();
       const client = await db.connect();
@@ -1946,7 +2214,7 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
         action: input.action,
         bundleId: input.bundleId,
         channel: input.channel,
-        actor: input.actor,
+        actor,
         notes: input.notes
       })
   );
@@ -1956,10 +2224,10 @@ export async function approveApprovalRequest(
   id: string,
   input: ReviewApprovalRequestInput = {}
 ): Promise<{ approvalRequest: ApprovalRequest; bundle?: BundleArtifact } | undefined> {
+  const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = authoritativeActor(input.actor);
       const reviewNotes = input.notes?.trim() || undefined;
       const now = new Date().toISOString();
       const client = await db.connect();
@@ -1986,6 +2254,7 @@ export async function approveApprovalRequest(
         if (request.state !== "pending") {
           throw new Error("approval request is not pending");
         }
+        assertIndependentApprovalReviewer(request, actor);
 
         const actionNotes = reviewNotes ?? request.notes;
         action = request.action;
@@ -2076,7 +2345,7 @@ export async function approveApprovalRequest(
         bundle: promotedBundle
       };
     },
-    async () => legacy.approveApprovalRequest(id, input)
+    async () => legacy.approveApprovalRequest(id, { ...input, actor })
   );
 }
 
@@ -2084,10 +2353,10 @@ export async function rejectApprovalRequest(
   id: string,
   input: ReviewApprovalRequestInput = {}
 ): Promise<ApprovalRequest | undefined> {
+  const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
       const tenant = defaultTenantId();
-      const actor = input.actor?.trim() || defaultActor();
       const reviewNotes = input.notes?.trim() || undefined;
       const now = new Date().toISOString();
       const result = await db.query(
@@ -2120,7 +2389,7 @@ export async function rejectApprovalRequest(
       });
       return rejected;
     },
-    async () => legacy.rejectApprovalRequest(id, input)
+    async () => legacy.rejectApprovalRequest(id, { ...input, actor })
   );
 }
 
@@ -2300,7 +2569,57 @@ function toBase64URL(payload: Buffer | string): string {
   return raw.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
-function signBundleFiles(files: BundleSignatureFile[], signing: BundleSigningConfig, issuedAtUnix: number): string {
+function fromBase64URL(payload: string): Buffer {
+  let normalized = payload.replaceAll("-", "+").replaceAll("_", "/");
+  while (normalized.length % 4 !== 0) {
+    normalized += "=";
+  }
+  return Buffer.from(normalized, "base64");
+}
+
+async function signWithExternalBundleSigner(signingInput: string, signing: BundleSigningConfig): Promise<string> {
+  const signer = signing.externalSigner;
+  if (!signer) {
+    throw new Error("external bundle signer is not configured");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), signer.timeoutMs);
+  try {
+    const response = await fetch(signer.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(signer.token ? { Authorization: `Bearer ${signer.token}` } : {})
+      },
+      body: JSON.stringify({
+        version: "v1",
+        algorithm: signing.algorithm,
+        key_id: signing.keyID,
+        scope: signing.scope,
+        signing_input: signingInput
+      }),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`external bundle signer returned ${response.status}`);
+    }
+    const payload = (await response.json()) as { signature?: unknown };
+    const signature = typeof payload.signature === "string" ? payload.signature : "";
+    if (!/^[A-Za-z0-9_-]+$/.test(signature) || fromBase64URL(signature).length < 256) {
+      throw new Error("external bundle signer returned an invalid RS256 signature");
+    }
+    return signature;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("external bundle signer")) {
+      throw error;
+    }
+    throw new Error("external bundle signer request failed");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function signBundleFiles(files: BundleSignatureFile[], signing: BundleSigningConfig, issuedAtUnix: number): Promise<string> {
   const header = {
     alg: signing.algorithm,
     typ: "JWT",
@@ -2314,7 +2633,16 @@ function signBundleFiles(files: BundleSignatureFile[], signing: BundleSigningCon
     iss: "arbiter-control-plane"
   };
   const signingInput = `${toBase64URL(JSON.stringify(header))}.${toBase64URL(JSON.stringify(payload))}`;
-  const signature = createHmac("sha256", signing.secret).update(signingInput).digest();
+  if (signing.externalSigner) {
+    return `${signingInput}.${await signWithExternalBundleSigner(signingInput, signing)}`;
+  }
+  if (!signing.secret) {
+    throw new Error("bundle signing secret is required");
+  }
+  const signature =
+    signing.algorithm === "HS256"
+      ? createHmac("sha256", signing.secret).update(signingInput).digest()
+      : signDetached("RSA-SHA256", Buffer.from(signingInput, "utf8"), signing.secret);
   return `${signingInput}.${toBase64URL(signature)}`;
 }
 
@@ -2399,7 +2727,7 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
     Buffer.from(
       JSON.stringify(
         {
-          signatures: [signBundleFiles(signatureFiles, signing, issuedAtUnix)]
+          signatures: [await signBundleFiles(signatureFiles, signing, issuedAtUnix)]
         },
         null,
         2

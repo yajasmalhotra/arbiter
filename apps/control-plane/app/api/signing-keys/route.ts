@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
     secret?: string;
     keyId?: string;
     scope?: string;
+    algorithm?: "HS256" | "RS256";
     actor?: string;
     activate?: boolean;
   };
@@ -41,6 +42,7 @@ export async function POST(request: NextRequest) {
       secret: typeof body.secret === "string" ? body.secret : "",
       keyId: typeof body.keyId === "string" ? body.keyId : undefined,
       scope: typeof body.scope === "string" ? body.scope : undefined,
+      algorithm: body.algorithm === "HS256" || body.algorithm === "RS256" ? body.algorithm : undefined,
       actor: typeof body.actor === "string" ? body.actor : undefined,
       activate: Boolean(body.activate)
     });

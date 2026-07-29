@@ -2,6 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
+import { defaultActor } from "./context";
+
 import type {
   ApprovalAction,
   ApprovalRequest,
@@ -83,7 +85,7 @@ export async function upsertPolicy(input: Omit<PolicyRecord, "createdAt" | "upda
     await writeData(data);
     await appendAuditEvent({
       action: "policy_updated",
-      actor: "control-plane",
+      actor: defaultActor(),
       policyId: existing.id,
       metadata: { rolloutState: existing.rolloutState }
     });
@@ -99,7 +101,7 @@ export async function upsertPolicy(input: Omit<PolicyRecord, "createdAt" | "upda
   await writeData(data);
   await appendAuditEvent({
     action: "policy_created",
-    actor: "control-plane",
+    actor: defaultActor(),
     policyId: created.id,
     metadata: { rolloutState: created.rolloutState }
   });
@@ -116,7 +118,7 @@ export async function deletePolicy(id: string): Promise<boolean> {
   await writeData(data);
   await appendAuditEvent({
     action: "policy_deleted",
-    actor: "control-plane",
+    actor: defaultActor(),
     policyId: id
   });
   return true;
@@ -134,7 +136,7 @@ export async function setRolloutState(id: string, rolloutState: RolloutState): P
   await writeData(data);
   await appendAuditEvent({
     action: "rollout_state_changed",
-    actor: "control-plane",
+    actor: defaultActor(),
     policyId: id,
     metadata: { rolloutState }
   });
@@ -251,7 +253,7 @@ function currentBundleForChannel(
 
 export async function createApprovalRequest(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
   const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
   const now = new Date().toISOString();
   const channel = input.channel;
   let bundleId = input.bundleId?.trim() ?? "";
@@ -311,7 +313,7 @@ export async function createApprovalRequest(input: CreateApprovalRequestInput): 
 export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
   const data = await readData();
   const now = new Date().toISOString();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
 
   const selectedPolicies = (input.policyIds?.length
     ? data.policies.filter((policy) => input.policyIds?.includes(policy.id))
@@ -375,7 +377,7 @@ type ActivateBundleInput = {
 
 export async function activateBundle(id: string, input: ActivateBundleInput = {}): Promise<BundleArtifact | undefined> {
   const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
   const now = new Date().toISOString();
 
   const target = data.bundles.find((bundle) => bundle.id === id);
@@ -429,7 +431,7 @@ export async function rollbackChannel(
   input: ActivateBundleInput = {}
 ): Promise<BundleArtifact | undefined> {
   const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
   const now = new Date().toISOString();
 
   const currentActivation = data.bundleActivations
@@ -505,10 +507,13 @@ export async function approveApprovalRequest(
   input: ReviewApprovalRequestInput = {}
 ): Promise<{ approvalRequest: ApprovalRequest; bundle?: BundleArtifact } | undefined> {
   const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
   const request = data.approvalRequests.find((item) => item.id === id);
   if (!request || request.state !== "pending") {
     return undefined;
+  }
+  if (request.channel === "prod" && request.requestedBy === actor) {
+    throw new Error("production approval must be reviewed by a different actor than the requester");
   }
 
   let bundle: BundleArtifact | undefined;
@@ -566,7 +571,7 @@ export async function rejectApprovalRequest(
   input: ReviewApprovalRequestInput = {}
 ): Promise<ApprovalRequest | undefined> {
   const data = await readData();
-  const actor = input.actor?.trim() || "control-plane";
+  const actor = input.actor?.trim() || defaultActor();
   const request = data.approvalRequests.find((item) => item.id === id);
   if (!request || request.state !== "pending") {
     return undefined;

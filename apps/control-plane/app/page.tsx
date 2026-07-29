@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { listAuditEvents, listPolicies } from "@/lib/store";
+import { listAuditEvents, listPolicies, verifyAuditIntegrity } from "@/lib/store";
 import { auditActionLabel, formatTimestamp, rolloutLabel } from "@/lib/presentation";
 import { establishControlPlanePageContext } from "@/lib/server-identity";
 import { runWithControlPlaneRequestContext } from "@/lib/context";
@@ -28,7 +28,7 @@ export default async function HomePage() {
       </div>
     );
   }
-  const [policies, auditEvents] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents()]));
+  const [policies, auditEvents, auditIntegrity] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity()]));
   const byState = policies.reduce<Record<string, number>>((acc, policy) => {
     acc[policy.rolloutState] = (acc[policy.rolloutState] || 0) + 1;
     return acc;
@@ -101,6 +101,22 @@ export default async function HomePage() {
               <Link href="/operations">Open operations</Link>
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardDescription>Tamper-evident audit evidence</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Badge variant={auditIntegrity.verified ? "default" : "secondary"}>{auditIntegrity.verified ? "Verified" : "Not sealed"}</Badge>
+            {auditIntegrity.checkedEvents} chained events
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          {auditIntegrity.verified
+            ? `Latest tenant chain hash: ${auditIntegrity.latestHash}`
+            : auditIntegrity.failure ?? "No Postgres-backed audit events have been sealed yet."}
+          {auditIntegrity.unsealedLegacyEvents > 0 && <p className="mt-1">{auditIntegrity.unsealedLegacyEvents} legacy events are visible but predate audit sealing.</p>}
         </CardContent>
       </Card>
 

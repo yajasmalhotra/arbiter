@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
@@ -35,29 +36,131 @@ func main() {
 	metrics := telemetry.NewCounterRecorder()
 	tenantID := stringEnv("ARBITER_TENANT_ID", "default")
 	actorID := stringEnv("ARBITER_MCP_ACTOR_ID", "mcp-client")
+	gatewaySharedKey := strings.TrimSpace(os.Getenv("ARBITER_GATEWAY_SHARED_KEY"))
+	serviceSharedKey := strings.TrimSpace(os.Getenv("ARBITER_SERVICE_SHARED_KEY"))
+	requireWorkloadIdentity := boolEnv("ARBITER_REQUIRE_WORKLOAD_IDENTITY", false)
+	requireCapability := boolEnv("ARBITER_REQUIRE_CAPABILITY", false)
+	auditPostgresDSN := strings.TrimSpace(os.Getenv("ARBITER_AUDIT_POSTGRES_DSN"))
+	auditPostgresQueue := intEnv("ARBITER_AUDIT_POSTGRES_QUEUE", 1024)
+	capabilityAlgorithm := strings.ToUpper(strings.TrimSpace(stringEnv("ARBITER_CAPABILITY_ALGORITHM", "HS256")))
+	oidcJWKSURL := strings.TrimSpace(os.Getenv("ARBITER_MCP_OIDC_JWKS_URL"))
+	oidcIssuer := strings.TrimSpace(os.Getenv("ARBITER_MCP_OIDC_ISSUER"))
+	mcpJWTSecret := strings.TrimSpace(os.Getenv("ARBITER_MCP_JWT_SECRET"))
+	if boolEnv("ARBITER_PRODUCTION_MODE", false) {
+		if err := validateProductionConfig(productionConfig{
+			RequireWorkloadIdentity: requireWorkloadIdentity,
+			OIDCJWKSURL:             oidcJWKSURL,
+			OIDCIssuer:              oidcIssuer,
+			JWTSecret:               mcpJWTSecret,
+			RS256PrivateKey:         os.Getenv("ARBITER_TOKEN_RS256_PRIVATE_KEY"),
+			RedisAddress:            os.Getenv("ARBITER_REDIS_ADDR"),
+			AuditPostgresDSN:        auditPostgresDSN,
+			GatewaySharedKey:        gatewaySharedKey,
+			ServiceSharedKey:        serviceSharedKey,
+			RequireCapability:       requireCapability,
+			CapabilityAlgorithm:     capabilityAlgorithm,
+			CapabilityPublicKey:     os.Getenv("ARBITER_CAPABILITY_PUBLIC_KEY"),
+		}); err != nil {
+			logger.Error("invalid production MCP gateway configuration", "error", err)
+			os.Exit(1)
+		}
+	}
+	if requireWorkloadIdentity && oidcJWKSURL == "" && mcpJWTSecret == "" {
+		logger.Error("ARBITER_REQUIRE_WORKLOAD_IDENTITY requires ARBITER_MCP_OIDC_JWKS_URL or ARBITER_MCP_JWT_SECRET")
+		os.Exit(1)
+	}
+	if oidcJWKSURL != "" && oidcIssuer == "" {
+		logger.Error("ARBITER_MCP_OIDC_ISSUER is required with ARBITER_MCP_OIDC_JWKS_URL")
+		os.Exit(1)
+	}
+	tokenIssuer := stringEnv("ARBITER_TOKEN_ISSUER", "arbiter")
+	tokenTTL := durationEnv("ARBITER_TOKEN_TTL", 2*time.Minute)
+	tokenActiveKeyID := stringEnv("ARBITER_TOKEN_ACTIVE_KID", "default")
+	var (
+		stateStore  state.Store              = state.NewMemoryStore()
+		replay      executorauth.ReplayCache = executorauth.NewMemoryReplayCache()
+		redisClient redis.UniversalClient
+	)
+	if redisAddress := strings.TrimSpace(os.Getenv("ARBITER_REDIS_ADDR")); redisAddress != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: redisAddress, PoolSize: 16, MinIdleConns: 4})
+		stateStore = state.NewRedisStore(redisClient, "arbiter:actions", 50)
+		replay = executorauth.NewRedisReplayCache(redisClient, "arbiter:replay")
+	}
+	var auditRecorder audit.Recorder = audit.NewLogRecorder(logger)
+	if auditPostgresDSN != "" {
+		postgresAudit, err := audit.NewPostgresRecorder(context.Background(), auditPostgresDSN, auditPostgresQueue, logger)
+		if err != nil {
+			logger.Error("failed to initialize Postgres audit recorder", "error", err)
+			os.Exit(1)
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := postgresAudit.Close(shutdownCtx); err != nil {
+				logger.Error("failed to close Postgres audit recorder", "error", err)
+			}
+		}()
+		auditRecorder = audit.NewMultiRecorder(auditRecorder, postgresAudit)
+	}
+	permitIssuer := executorauth.NewIssuerVerifier([]byte(stringEnv("ARBITER_TOKEN_SECRET", "dev-secret-change-me")), tokenIssuer, tokenTTL, replay)
+	if rawRS256Key := strings.TrimSpace(os.Getenv("ARBITER_TOKEN_RS256_PRIVATE_KEY")); rawRS256Key != "" {
+		privateKey, err := executorauth.ParseRS256PrivateKeyPEM([]byte(rawRS256Key))
+		if err != nil {
+			logger.Error("invalid ARBITER_TOKEN_RS256_PRIVATE_KEY", "error", err)
+			os.Exit(1)
+		}
+		permitIssuer = executorauth.NewIssuerVerifierWithRS256PrivateKeys(map[string]*rsa.PrivateKey{tokenActiveKeyID: privateKey}, tokenActiveKeyID, tokenIssuer, tokenTTL, replay)
+	}
 	engine := enforcement.New(enforcement.Config{DecisionTimeout: decisionTimeout, StateLookupLimit: intEnv("ARBITER_STATE_LOOKUP_LIMIT", 10), PolicyOwnedObligations: true},
-		state.NewMemoryStore(),
+		stateStore,
 		pdp.NewClient(stringEnv("ARBITER_OPA_URL", "http://localhost:8181"), stringEnv("ARBITER_OPA_PATH", "/v1/data/arbiter/authz/decision"), decisionTimeout),
-		executorauth.NewIssuerVerifier([]byte(stringEnv("ARBITER_TOKEN_SECRET", "dev-secret-change-me")), stringEnv("ARBITER_TOKEN_ISSUER", "arbiter"), durationEnv("ARBITER_TOKEN_TTL", 2*time.Minute), executorauth.NewMemoryReplayCache()),
-		audit.NewLogRecorder(logger), metrics)
+		permitIssuer,
+		auditRecorder, metrics)
 
 	authenticator := identity.Authenticator(identity.StaticAuthenticator{Principal: schema.Principal{Subject: actorID, TenantID: tenantID, Kind: "agent"}})
-	if jwksURL := strings.TrimSpace(os.Getenv("ARBITER_MCP_OIDC_JWKS_URL")); jwksURL != "" {
-		authenticator = &identity.OIDCAuthenticator{Issuer: stringEnv("ARBITER_MCP_OIDC_ISSUER", ""), Audience: stringEnv("ARBITER_MCP_OIDC_AUDIENCE", "arbiter-mcp"), JWKSURL: jwksURL, CacheTTL: durationEnv("ARBITER_MCP_OIDC_JWKS_CACHE_TTL", 5*time.Minute)}
-	} else if secret := os.Getenv("ARBITER_MCP_JWT_SECRET"); secret != "" {
-		authenticator = identity.JWTAuthenticator{Secret: []byte(secret), Issuer: stringEnv("ARBITER_MCP_JWT_ISSUER", "arbiter"), Audience: stringEnv("ARBITER_MCP_JWT_AUDIENCE", "arbiter-mcp")}
+	if oidcJWKSURL != "" {
+		authenticator = &identity.OIDCAuthenticator{Issuer: oidcIssuer, Audience: stringEnv("ARBITER_MCP_OIDC_AUDIENCE", "arbiter-mcp"), JWKSURL: oidcJWKSURL, CacheTTL: durationEnv("ARBITER_MCP_OIDC_JWKS_CACHE_TTL", 5*time.Minute)}
+	} else if mcpJWTSecret != "" {
+		authenticator = identity.JWTAuthenticator{Secret: []byte(mcpJWTSecret), Issuer: stringEnv("ARBITER_MCP_JWT_ISSUER", "arbiter"), Audience: stringEnv("ARBITER_MCP_JWT_AUDIENCE", "arbiter-mcp")}
 	}
 	var delegationVerifier *delegation.Verifier
 	if secret := os.Getenv("ARBITER_DELEGATION_SECRET"); secret != "" {
 		delegationVerifier = &delegation.Verifier{Keys: map[string][]byte{stringEnv("ARBITER_DELEGATION_KID", "default"): []byte(secret)}, Issuer: stringEnv("ARBITER_DELEGATION_ISSUER", "arbiter"), Audience: stringEnv("ARBITER_DELEGATION_AUDIENCE", "arbiter-delegation"), MaxDepth: intEnv("ARBITER_DELEGATION_MAX_DEPTH", 4)}
 	}
 	var capabilityVerifier *capability.Verifier
-	if secret := os.Getenv("ARBITER_CAPABILITY_SECRET"); secret != "" {
-		var revocations capability.RevocationStore = capability.NewMemoryRevocationStore()
-		if redisAddress := strings.TrimSpace(os.Getenv("ARBITER_REDIS_ADDR")); redisAddress != "" {
-			revocations = capability.NewRedisRevocationStore(redis.NewClient(&redis.Options{Addr: redisAddress}), "arbiter:capability:revoked")
+	capabilityKeyID := stringEnv("ARBITER_CAPABILITY_KID", "default")
+	capabilityIssuer := stringEnv("ARBITER_CAPABILITY_ISSUER", "arbiter")
+	capabilityAudience := stringEnv("ARBITER_CAPABILITY_AUDIENCE", "arbiter-capability")
+	newCapabilityRevocationStore := func() capability.RevocationStore {
+		if redisClient != nil {
+			return capability.NewRedisRevocationStore(redisClient, "arbiter:capability:revoked")
 		}
-		capabilityVerifier = &capability.Verifier{Keys: map[string][]byte{stringEnv("ARBITER_CAPABILITY_KID", "default"): []byte(secret)}, Issuer: stringEnv("ARBITER_CAPABILITY_ISSUER", "arbiter"), Audience: stringEnv("ARBITER_CAPABILITY_AUDIENCE", "arbiter-capability"), Revocations: revocations}
+		return capability.NewMemoryRevocationStore()
+	}
+	switch capabilityAlgorithm {
+	case "HS256":
+		if secret := os.Getenv("ARBITER_CAPABILITY_SECRET"); secret != "" {
+			capabilityVerifier = &capability.Verifier{Keys: map[string][]byte{capabilityKeyID: []byte(secret)}, Issuer: capabilityIssuer, Audience: capabilityAudience, Revocations: newCapabilityRevocationStore()}
+		}
+	case "RS256":
+		rawPublicKey := strings.TrimSpace(os.Getenv("ARBITER_CAPABILITY_PUBLIC_KEY"))
+		if rawPublicKey == "" {
+			logger.Error("ARBITER_CAPABILITY_PUBLIC_KEY is required for RS256 capability verification")
+			os.Exit(1)
+		}
+		publicKey, err := capability.ParseRS256PublicKeyPEM([]byte(rawPublicKey))
+		if err != nil {
+			logger.Error("invalid ARBITER_CAPABILITY_PUBLIC_KEY", "error", err)
+			os.Exit(1)
+		}
+		capabilityVerifier = &capability.Verifier{RS256Keys: map[string]*rsa.PublicKey{capabilityKeyID: publicKey}, Issuer: capabilityIssuer, Audience: capabilityAudience, Revocations: newCapabilityRevocationStore()}
+	default:
+		logger.Error("ARBITER_CAPABILITY_ALGORITHM must be HS256 or RS256")
+		os.Exit(1)
+	}
+	if requireCapability && capabilityVerifier == nil {
+		logger.Error("ARBITER_REQUIRE_CAPABILITY requires a capability verification key")
+		os.Exit(1)
 	}
 	var approvalVerifier *approval.IssuerVerifier
 	if secret := os.Getenv("ARBITER_APPROVAL_SECRET"); secret != "" {
@@ -83,13 +186,13 @@ func main() {
 		ServerURI:          os.Getenv("ARBITER_MCP_SERVER_URI"),
 		TenantID:           tenantID,
 		ActorID:            actorID,
-		GatewaySharedKey:   os.Getenv("ARBITER_GATEWAY_SHARED_KEY"),
+		GatewaySharedKey:   gatewaySharedKey,
 		MaxBodyBytes:       int64Env("ARBITER_MAX_BODY_BYTES", 1<<20),
 		Timeout:            durationEnv("ARBITER_MCP_UPSTREAM_TIMEOUT", 30*time.Second),
 		Authenticator:      authenticator,
 		DelegationVerifier: delegationVerifier,
 		CapabilityVerifier: capabilityVerifier,
-		RequireCapability:  boolEnv("ARBITER_REQUIRE_CAPABILITY", false),
+		RequireCapability:  requireCapability,
 		ApprovalVerifier:   approvalVerifier,
 	}, engine)
 	if err != nil {
@@ -100,8 +203,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("POST /mcp", gateway)
 	mux.HandleFunc("POST /v1/capabilities/revoke", func(w http.ResponseWriter, r *http.Request) {
-		serviceKey := strings.TrimSpace(os.Getenv("ARBITER_SERVICE_SHARED_KEY"))
-		if capabilityVerifier == nil || serviceKey == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Arbiter-Service-Key")), []byte(serviceKey)) != 1 {
+		if capabilityVerifier == nil || serviceSharedKey == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Arbiter-Service-Key")), []byte(serviceSharedKey)) != 1 {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}

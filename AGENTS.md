@@ -52,8 +52,13 @@ Important environment variables:
 
 - `ARBITER_ADDR` sets the listen address, default `:8080`.
 - `ARBITER_OPA_URL` and `ARBITER_OPA_PATH` point to the OPA decision endpoint.
-- `ARBITER_TOKEN_SECRET` or `ARBITER_TOKEN_KEYS` control execution-token signing.
+- `ARBITER_TOKEN_SECRET` or `ARBITER_TOKEN_KEYS` control HS256 execution-token
+  signing. `ARBITER_TOKEN_RS256_PRIVATE_KEY` enables RS256 permit signing so
+  executors can be provisioned with verification-only public keys.
 - `ARBITER_TOKEN_ACTIVE_KID` selects the active signing key when multiple keys are configured.
+- `ARBITER_PRODUCTION_MODE=true` validates the interceptor's enterprise
+  baseline at startup: workload identity, RS256 permits, Redis, Postgres audit,
+  and the service shared key are mandatory.
 - `ARBITER_REDIS_ADDR` enables Redis-backed state and replay caches.
 - `ARBITER_GATEWAY_SHARED_KEY` and `ARBITER_SERVICE_SHARED_KEY` gate trust-boundary routes.
 - `ARBITER_FAST_ALLOWED_TOOLS` defines the allowlist used by the streamed race-gate route.
@@ -267,6 +272,9 @@ Control-plane routes:
 - `GET /api/bundles/channels/:channel/manifest` and `GET /api/bundles/channels/:channel/artifact` are the OPA-facing distribution endpoints.
 - `GET /api/revisions` and `GET /api/bundles/activations` expose version history.
 - `GET /api/audit` surfaces audit history.
+- `GET /api/audit/verify` verifies the tenant's Postgres-backed tamper-evident
+  audit chain. Legacy pre-migration records are explicitly reported as
+  unsealed rather than treated as verified evidence.
 - `GET /api/service-tokens`, `POST /api/service-tokens`, and `POST /api/service-tokens/:id/revoke` manage bundle-fetch credentials.
 - `GET /api/signing-keys`, `POST /api/signing-keys`, `POST /api/signing-keys/:id/activate`, and `POST /api/signing-keys/:id/revoke` manage bundle-signing rotation.
 - Mutating routes require `CONTROL_PLANE_API_KEY` when configured, and `X-Arbiter-Tenant-ID` must match `ARBITER_TENANT_ID` when that fence is enabled.
@@ -278,11 +286,20 @@ Control-plane storage behavior:
 - Local JSON fallback exists only for dev convenience.
 - `apps/control-plane/.data/control-plane.json` is generated local state and must remain gitignored and untracked.
 - The bundle signer uses the active DB-backed signing key when Postgres is enabled.
-- Environment signing values seed or bootstrap the signing path when DB state is unavailable.
+  Bootstrap environment material seeds an initial key but must never override an
+  explicit activation or revocation. RS256 is preferred for deployments because
+  only the control plane retains the private key; HS256 remains for local compatibility.
+  Postgres signing-key material is AES-256-GCM encrypted when
+  `ARBITER_SIGNING_KEY_ENCRYPTION_KEY` is configured (and this is required by
+  default in production).
+  `ARBITER_BUNDLE_SIGNER_URL` selects an external RS256 signer for KMS/HSM
+  deployments and bypasses local private-key loading entirely.
 - The control-plane bundle builder reads directly from the mounted `policy/` tree, so Docker/Compose runs must provide `ARBITER_POLICY_ROOT=/policy` and mount that directory read-only.
 - Bundle archive output includes `.manifest`, policy files from `policy/core` and `policy/domain`, `data.json`, `snapshot.json`, and `.signatures.json`.
 - The artifact route may auto-bootstrap a first prod bundle when no prod channel is active yet.
 - Signing keys are audited on create, activate, and revoke.
+- Production approvals enforce separation of duties: the authenticated requester
+  cannot approve the same rollout or rollback request.
 
 ### `integrations/python/`
 
@@ -393,10 +410,21 @@ Update these files when request/response shapes change.
 
 - No tool executes without a valid signed allow token.
 - OPA denial, token validation failure, replay detection, or missing required context must fail closed.
+- A `Decision{Allow:false}` can never mint an execution permit, even if a
+  custom decider incorrectly returns it without `pdp.ErrDeniedByPolicy`.
+- Permit issuance also rejects empty decision IDs, preventing replay cache keys
+  from collapsing across otherwise unrelated decisions.
+- Canonical requests must use an explicitly supported schema version
+  (`v1alpha1` during migration or `v1alpha2`); unknown versions fail closed.
 - The control plane must never sit on the request hot path.
 - Stream buffering must be bounded.
 - Any new network call on the hot path needs an explicit timeout and failure mode.
 - Do not trust upstream approval alone; the executor must verify the token itself.
+- When `ARBITER_INTERCEPTOR_OIDC_JWKS_URL` or `ARBITER_INTERCEPTOR_JWT_SECRET`
+  is configured, HTTP interception binds the canonical tenant, actor, and
+  principal to the verified workload identity before policy evaluation.
+  `ARBITER_REQUIRE_WORKLOAD_IDENTITY=true` makes the absence of either
+  authentication mode fail closed for every interception request.
 
 ## Working Rules
 

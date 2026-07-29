@@ -16,11 +16,12 @@ const (
 )
 
 var (
-	ErrMissingRequestID = errors.New("missing request id")
-	ErrMissingTenantID  = errors.New("missing tenant id")
-	ErrMissingActorID   = errors.New("missing actor id")
-	ErrMissingToolName  = errors.New("missing tool name")
-	ErrInvalidParams    = errors.New("parameters must be valid json")
+	ErrMissingRequestID         = errors.New("missing request id")
+	ErrMissingTenantID          = errors.New("missing tenant id")
+	ErrMissingActorID           = errors.New("missing actor id")
+	ErrMissingToolName          = errors.New("missing tool name")
+	ErrInvalidParams            = errors.New("parameters must be valid json")
+	ErrUnsupportedSchemaVersion = errors.New("unsupported schema version")
 )
 
 type Metadata struct {
@@ -166,6 +167,8 @@ func (r *CanonicalRequest) Normalize() {
 
 func (r CanonicalRequest) Validate(maxParameterBytes int) error {
 	switch {
+	case r.SchemaVersion != LegacySchemaVersion && r.SchemaVersion != CurrentSchemaVersion:
+		return ErrUnsupportedSchemaVersion
 	case strings.TrimSpace(r.Metadata.RequestID) == "":
 		return ErrMissingRequestID
 	case strings.TrimSpace(r.Metadata.TenantID) == "":

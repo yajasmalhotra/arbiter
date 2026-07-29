@@ -83,6 +83,7 @@ export function OperationsWorkbench(props: Props) {
   const [keySecret, setKeySecret] = useState("");
   const [keyId, setKeyId] = useState("");
   const [keyScope, setKeyScope] = useState("read");
+  const [keyAlgorithm, setKeyAlgorithm] = useState<"HS256" | "RS256">("RS256");
   const [activateKeyNow, setActivateKeyNow] = useState(true);
 
   const [capabilityName, setCapabilityName] = useState("");
@@ -362,6 +363,7 @@ export function OperationsWorkbench(props: Props) {
           secret: keySecret.trim(),
           keyId: keyId.trim() || undefined,
           scope: keyScope.trim() || undefined,
+          algorithm: keyAlgorithm,
           activate: activateKeyNow
         })
       });
@@ -377,6 +379,7 @@ export function OperationsWorkbench(props: Props) {
       setKeyName("");
       setKeySecret("");
       setKeyId("");
+      setKeyAlgorithm("RS256");
       setStatus({ kind: "success", text: "Signing key created." });
       router.refresh();
     } finally {
@@ -904,15 +907,39 @@ export function OperationsWorkbench(props: Props) {
               <Input id="key-id" value={keyId} onChange={(e) => setKeyId(e.target.value)} disabled={!canApprove} />
             </div>
             <div className="grid gap-2 md:col-span-2">
-              <Label htmlFor="key-secret">Secret</Label>
-              <Input
-                id="key-secret"
-                type="password"
-                value={keySecret}
-                onChange={(e) => setKeySecret(e.target.value)}
-                placeholder="Paste shared signing secret"
+              <Label htmlFor="key-secret">{keyAlgorithm === "RS256" ? "RSA private key (PEM)" : "Shared signing secret"}</Label>
+              {keyAlgorithm === "RS256" ? (
+                <Textarea
+                  id="key-secret"
+                  className="min-h-28 font-mono text-xs"
+                  value={keySecret}
+                  onChange={(e) => setKeySecret(e.target.value)}
+                  placeholder="Paste RSA private key PEM"
+                  disabled={!canApprove}
+                />
+              ) : (
+                <Input
+                  id="key-secret"
+                  type="password"
+                  value={keySecret}
+                  onChange={(e) => setKeySecret(e.target.value)}
+                  placeholder="Paste shared signing secret"
+                  disabled={!canApprove}
+                />
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="key-algorithm">Algorithm</Label>
+              <select
+                id="key-algorithm"
+                className={selectClass}
+                value={keyAlgorithm}
+                onChange={(e) => setKeyAlgorithm(e.target.value === "HS256" ? "HS256" : "RS256")}
                 disabled={!canApprove}
-              />
+              >
+                <option value="RS256">RS256 (recommended)</option>
+                <option value="HS256">HS256 (legacy/shared secret)</option>
+              </select>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="key-scope">Scope</Label>
@@ -947,6 +974,7 @@ export function OperationsWorkbench(props: Props) {
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Key ID</th>
                   <th className="px-3 py-2">Scope</th>
+                  <th className="px-3 py-2">Algorithm</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Actions</th>
                 </tr>
@@ -957,6 +985,7 @@ export function OperationsWorkbench(props: Props) {
                     <td className="px-3 py-2">{key.name}</td>
                     <td className="px-3 py-2 font-mono text-xs">{key.keyId}</td>
                     <td className="px-3 py-2">{key.scope}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{key.algorithm}</td>
                     <td className="px-3 py-2">
                       {key.revokedAt ? (
                         <Badge variant="destructive">Revoked</Badge>

@@ -21,6 +21,16 @@ export type AuditEvent = {
   policyId?: string;
   at: string;
   metadata?: Record<string, unknown>;
+  previousHash?: string;
+  eventHash?: string;
+};
+
+export type AuditIntegrityReport = {
+  verified: boolean;
+  checkedEvents: number;
+  unsealedLegacyEvents: number;
+  latestHash?: string;
+  failure?: string;
 };
 
 export type PolicyRevision = {
@@ -103,7 +113,7 @@ export type SigningKey = {
   name: string;
   keyId: string;
   scope: string;
-  algorithm: "HS256";
+  algorithm: "HS256" | "RS256";
   isActive: boolean;
   createdBy: string;
   createdAt: string;

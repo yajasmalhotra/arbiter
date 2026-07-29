@@ -2,6 +2,7 @@ package interceptor
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"arbiter/internal/audit"
 	"arbiter/internal/enforcement"
 	"arbiter/internal/executorauth"
+	"arbiter/internal/identity"
 	"arbiter/internal/intent"
 	"arbiter/internal/pdp"
 	"arbiter/internal/schema"
@@ -20,14 +22,16 @@ import (
 )
 
 type Config struct {
-	MaxBodyBytes      int64
-	MaxParameterBytes int
-	DecisionTimeout   time.Duration
-	StateLookupLimit  int
-	FastAllowedTools  []string
-	GatewaySharedKey  string
-	ServiceSharedKey  string
-	IntentLabeler     intent.Labeler
+	MaxBodyBytes                  int64
+	MaxParameterBytes             int
+	DecisionTimeout               time.Duration
+	StateLookupLimit              int
+	FastAllowedTools              []string
+	GatewaySharedKey              string
+	ServiceSharedKey              string
+	Authenticator                 identity.Authenticator
+	RequireAuthenticatedPrincipal bool
+	IntentLabeler                 intent.Labeler
 }
 
 type Service struct {
@@ -39,6 +43,7 @@ type Service struct {
 	fastToolSet      map[string]struct{}
 	gatewaySharedKey string
 	serviceSharedKey string
+	authenticator    identity.Authenticator
 }
 
 type verifyExecutionRequest struct {
@@ -103,6 +108,7 @@ func NewService(config Config, stateStore state.Store, decider pdp.Decider, issu
 		fastToolSet:      fastToolSet,
 		gatewaySharedKey: strings.TrimSpace(config.GatewaySharedKey),
 		serviceSharedKey: strings.TrimSpace(config.ServiceSharedKey),
+		authenticator:    config.Authenticator,
 	}
 }
 
@@ -129,6 +135,10 @@ func (s *Service) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 func (s *Service) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.config.DecisionTimeout)
 	defer cancel()
+	if s.config.RequireAuthenticatedPrincipal && s.authenticator == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("workload identity is required but no authenticator is configured"))
+		return
+	}
 
 	if checker, ok := s.stateStore.(readyChecker); ok {
 		if err := checker.Ready(ctx); err != nil {
@@ -454,7 +464,7 @@ func (s *Service) authorizeWithKey(w http.ResponseWriter, r *http.Request, expec
 	if expected == "" {
 		return true
 	}
-	if r.Header.Get(header) != expected {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(header)), []byte(expected)) != 1 {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
 		return false
 	}
@@ -462,6 +472,23 @@ func (s *Service) authorizeWithKey(w http.ResponseWriter, r *http.Request, expec
 }
 
 func (s *Service) handleCanonicalIntercept(w http.ResponseWriter, r *http.Request, req schema.CanonicalRequest) {
+	if s.config.RequireAuthenticatedPrincipal && s.authenticator == nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "authenticated workload identity is required"})
+		return
+	}
+	if s.authenticator != nil {
+		principal, err := s.authenticator.Authenticate(r)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthenticated principal"})
+			return
+		}
+		// Provider envelopes are action descriptions, not identity assertions.
+		// When workload authentication is configured, replace their tenant and
+		// actor with verified identity before policy evaluation and permit minting.
+		req.Metadata.TenantID = principal.TenantID
+		req.AgentContext.Actor = schema.Actor{ID: principal.Subject, Type: principal.Kind}
+		req.Principal = &principal
+	}
 	req.Metadata.TraceID = traceIDForRequest(r, req.Metadata.TraceID)
 	result, err := s.engine.Enforce(r.Context(), req)
 	if err != nil {

@@ -168,6 +168,14 @@ func (e *Engine) evaluate(ctx context.Context, req schema.CanonicalRequest, issu
 		e.record(decisionCtx, req, decision, startedAt)
 		return Result{Decision: decision}, err
 	}
+	// Decider implementations should return pdp.ErrDeniedByPolicy for a deny,
+	// but the permit boundary cannot rely on every adapter or test double doing
+	// so. An explicit false decision is never eligible for a permit.
+	if !decision.Allow {
+		span.RecordError(pdp.ErrDeniedByPolicy)
+		e.record(decisionCtx, req, decision, startedAt)
+		return Result{Decision: decision}, pdp.ErrDeniedByPolicy
+	}
 
 	if !issuePermit {
 		e.record(decisionCtx, req, decision, startedAt)

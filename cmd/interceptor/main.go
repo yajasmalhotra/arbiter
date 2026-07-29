@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"arbiter/internal/audit"
 	"arbiter/internal/executorauth"
+	"arbiter/internal/identity"
 	"arbiter/internal/interceptor"
 	"arbiter/internal/pdp"
 	"arbiter/internal/state"
@@ -37,11 +39,27 @@ func main() {
 	fastAllowedTools := getCSVEnv("ARBITER_FAST_ALLOWED_TOOLS")
 	gatewaySharedKey := getEnv("ARBITER_GATEWAY_SHARED_KEY", "")
 	serviceSharedKey := getEnv("ARBITER_SERVICE_SHARED_KEY", "")
+	requireAuthenticatedPrincipal := getBoolEnv("ARBITER_REQUIRE_WORKLOAD_IDENTITY", false)
 	otelEnabled := getBoolEnv("ARBITER_OTEL_ENABLED", false)
 	otelEndpoint := getEnv("ARBITER_OTEL_ENDPOINT", "")
 	otelInsecure := getBoolEnv("ARBITER_OTEL_INSECURE", true)
 	auditPostgresDSN := getEnv("ARBITER_AUDIT_POSTGRES_DSN", "")
 	auditPostgresQueue := getIntEnv("ARBITER_AUDIT_POSTGRES_QUEUE", 1024)
+	productionMode := getBoolEnv("ARBITER_PRODUCTION_MODE", false)
+	if productionMode {
+		if err := validateProductionConfig(productionConfig{
+			RequireWorkloadIdentity: requireAuthenticatedPrincipal,
+			OIDCJWKSURL:             os.Getenv("ARBITER_INTERCEPTOR_OIDC_JWKS_URL"),
+			JWTSecret:               os.Getenv("ARBITER_INTERCEPTOR_JWT_SECRET"),
+			RS256PrivateKey:         os.Getenv("ARBITER_TOKEN_RS256_PRIVATE_KEY"),
+			RedisAddress:            os.Getenv("ARBITER_REDIS_ADDR"),
+			AuditPostgresDSN:        auditPostgresDSN,
+			ServiceSharedKey:        serviceSharedKey,
+		}); err != nil {
+			logger.Error("invalid production interceptor configuration", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	shutdownTracing, err := telemetry.InitOTel(context.Background(), telemetry.OTelConfig{
 		Enabled:     otelEnabled,
@@ -61,6 +79,21 @@ func main() {
 		stateStore state.Store              = state.NewMemoryStore()
 		replay     executorauth.ReplayCache = executorauth.NewMemoryReplayCache()
 	)
+	var authenticator identity.Authenticator
+	if jwksURL := strings.TrimSpace(os.Getenv("ARBITER_INTERCEPTOR_OIDC_JWKS_URL")); jwksURL != "" {
+		authenticator = &identity.OIDCAuthenticator{
+			Issuer:   getEnv("ARBITER_INTERCEPTOR_OIDC_ISSUER", ""),
+			Audience: getEnv("ARBITER_INTERCEPTOR_OIDC_AUDIENCE", "arbiter-interceptor"),
+			JWKSURL:  jwksURL,
+			CacheTTL: getDurationEnv("ARBITER_INTERCEPTOR_OIDC_JWKS_CACHE_TTL", 5*time.Minute),
+		}
+	} else if secret := strings.TrimSpace(os.Getenv("ARBITER_INTERCEPTOR_JWT_SECRET")); secret != "" {
+		authenticator = identity.JWTAuthenticator{
+			Secret:   []byte(secret),
+			Issuer:   getEnv("ARBITER_INTERCEPTOR_JWT_ISSUER", "arbiter"),
+			Audience: getEnv("ARBITER_INTERCEPTOR_JWT_AUDIENCE", "arbiter-interceptor"),
+		}
+	}
 	metricsRecorder := telemetry.NewCounterRecorder()
 	var auditRecorder audit.Recorder = audit.NewLogRecorder(logger)
 
@@ -72,6 +105,21 @@ func main() {
 		})
 		stateStore = state.NewRedisStore(client, "arbiter:actions", 50)
 		replay = executorauth.NewRedisReplayCache(client, "arbiter:replay")
+	}
+	issuer := newIssuerVerifier(tokenSecret, tokenKeys, tokenActiveKeyID, tokenIssuer, tokenTTL, replay)
+	if rawRS256Key := strings.TrimSpace(os.Getenv("ARBITER_TOKEN_RS256_PRIVATE_KEY")); rawRS256Key != "" {
+		privateKey, err := executorauth.ParseRS256PrivateKeyPEM([]byte(rawRS256Key))
+		if err != nil {
+			logger.Error("invalid ARBITER_TOKEN_RS256_PRIVATE_KEY", "error", err)
+			os.Exit(1)
+		}
+		issuer = executorauth.NewIssuerVerifierWithRS256PrivateKeys(
+			map[string]*rsa.PrivateKey{tokenActiveKeyID: privateKey},
+			tokenActiveKeyID,
+			tokenIssuer,
+			tokenTTL,
+			replay,
+		)
 	}
 
 	if strings.TrimSpace(auditPostgresDSN) != "" {
@@ -92,17 +140,19 @@ func main() {
 
 	service := interceptor.NewService(
 		interceptor.Config{
-			MaxBodyBytes:      maxBodyBytes,
-			MaxParameterBytes: maxParameterBytes,
-			DecisionTimeout:   decisionTimeout,
-			StateLookupLimit:  stateLookupLimit,
-			FastAllowedTools:  fastAllowedTools,
-			GatewaySharedKey:  gatewaySharedKey,
-			ServiceSharedKey:  serviceSharedKey,
+			MaxBodyBytes:                  maxBodyBytes,
+			MaxParameterBytes:             maxParameterBytes,
+			DecisionTimeout:               decisionTimeout,
+			StateLookupLimit:              stateLookupLimit,
+			FastAllowedTools:              fastAllowedTools,
+			GatewaySharedKey:              gatewaySharedKey,
+			ServiceSharedKey:              serviceSharedKey,
+			Authenticator:                 authenticator,
+			RequireAuthenticatedPrincipal: requireAuthenticatedPrincipal,
 		},
 		stateStore,
 		pdp.NewClient(opaURL, opaPath, decisionTimeout),
-		newIssuerVerifier(tokenSecret, tokenKeys, tokenActiveKeyID, tokenIssuer, tokenTTL, replay),
+		issuer,
 		auditRecorder,
 		metricsRecorder,
 	)

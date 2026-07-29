@@ -88,6 +88,34 @@ func TestCanonicalRequestValidateRejectsLargePayload(t *testing.T) {
 	}
 }
 
+func TestCanonicalRequestValidateRejectsUnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+	req := CanonicalRequest{
+		SchemaVersion: "v9alpha9",
+		Metadata:      Metadata{RequestID: "req-1", TenantID: "tenant-1"},
+		AgentContext:  AgentContext{Actor: Actor{ID: "actor-1"}},
+		ToolName:      "send_slack_message",
+		Parameters:    []byte(`{"message":"hello"}`),
+	}
+	if err := req.Validate(1024); err != ErrUnsupportedSchemaVersion {
+		t.Fatalf("expected unsupported schema rejection, got %v", err)
+	}
+}
+
+func TestCanonicalRequestValidateRetainsLegacyCompatibility(t *testing.T) {
+	t.Parallel()
+	req := CanonicalRequest{
+		SchemaVersion: LegacySchemaVersion,
+		Metadata:      Metadata{RequestID: "req-1", TenantID: "tenant-1"},
+		AgentContext:  AgentContext{Actor: Actor{ID: "actor-1"}},
+		ToolName:      "send_slack_message",
+		Parameters:    []byte(`{"message":"hello"}`),
+	}
+	if err := req.Validate(1024); err != nil {
+		t.Fatalf("legacy request should remain valid, got %v", err)
+	}
+}
+
 func TestV1Alpha2HashBindsProtocolAuthorityAndCapability(t *testing.T) {
 	t.Parallel()
 	base := CanonicalRequest{

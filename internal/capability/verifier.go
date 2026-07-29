@@ -5,7 +5,10 @@ package capability
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"sync"
@@ -95,7 +98,8 @@ func (s *MemoryRevocationStore) Revoke(_ context.Context, grantID string, expire
 }
 
 type Verifier struct {
-	Keys        map[string][]byte
+	Keys        map[string][]byte // HS256 compatibility keys.
+	RS256Keys   map[string]*rsa.PublicKey
 	Issuer      string
 	Audience    string
 	Revocations RevocationStore
@@ -112,19 +116,29 @@ func (v Verifier) Revoke(ctx context.Context, grantID string, expiresAt time.Tim
 }
 
 func (v Verifier) Verify(ctx context.Context, raw string, principal schema.Principal, req schema.CanonicalRequest) (schema.Capability, error) {
-	if strings.TrimSpace(raw) == "" || len(v.Keys) == 0 || v.Issuer == "" || v.Audience == "" {
+	if strings.TrimSpace(raw) == "" || (len(v.Keys) == 0 && len(v.RS256Keys) == 0) || v.Issuer == "" || v.Audience == "" {
 		return schema.Capability{}, ErrInvalidGrant
 	}
 	parsed, err := jwt.ParseWithClaims(raw, &Claims{}, func(token *jwt.Token) (any, error) {
-		if token.Method != jwt.SigningMethodHS256 {
-			return nil, ErrInvalidGrant
-		}
 		keyID, _ := token.Header["kid"].(string)
-		key, ok := v.Keys[keyID]
-		if !ok || keyID == "" {
+		if keyID == "" {
 			return nil, ErrInvalidGrant
 		}
-		return key, nil
+		if token.Method == jwt.SigningMethodHS256 {
+			key := v.Keys[keyID]
+			if len(key) == 0 {
+				return nil, ErrInvalidGrant
+			}
+			return key, nil
+		}
+		if token.Method == jwt.SigningMethodRS256 {
+			key := v.RS256Keys[keyID]
+			if !validRS256Key(key) {
+				return nil, ErrInvalidGrant
+			}
+			return key, nil
+		}
+		return nil, ErrInvalidGrant
 	}, jwt.WithIssuer(v.Issuer), jwt.WithAudience(v.Audience))
 	if err != nil || !parsed.Valid {
 		return schema.Capability{}, ErrInvalidGrant
@@ -157,6 +171,34 @@ func (v Verifier) Verify(ctx context.Context, raw string, principal schema.Princ
 		MaxAmountCents: claims.MaxAmountCents, MayDelegate: claims.MayDelegate,
 		WorkloadID: claims.WorkloadID,
 	}, nil
+}
+
+func validRS256Key(key *rsa.PublicKey) bool {
+	return key != nil && key.N != nil && key.N.BitLen() >= 2048 && key.E >= 3 && key.E%2 == 1
+}
+
+// ParseRS256PublicKeyPEM accepts a PKIX public-key PEM or certificate PEM for
+// RS256 capability verification. Gateways receive this public material only.
+func ParseRS256PublicKeyPEM(raw []byte) (*rsa.PublicKey, error) {
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, ErrInvalidGrant
+	}
+	if certificate, err := x509.ParseCertificate(block.Bytes); err == nil {
+		if key, ok := certificate.PublicKey.(*rsa.PublicKey); ok && validRS256Key(key) {
+			return key, nil
+		}
+		return nil, ErrInvalidGrant
+	}
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, ErrInvalidGrant
+	}
+	rsaKey, ok := key.(*rsa.PublicKey)
+	if !ok || !validRS256Key(rsaKey) {
+		return nil, ErrInvalidGrant
+	}
+	return rsaKey, nil
 }
 
 func contains(values []string, value string) bool {

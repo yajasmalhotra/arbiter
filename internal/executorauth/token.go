@@ -2,7 +2,11 @@ package executorauth
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"strings"
 	"time"
 
 	"arbiter/internal/schema"
@@ -14,9 +18,10 @@ import (
 )
 
 var (
-	ErrInvalidToken   = errors.New("invalid token")
-	ErrReplayDetected = errors.New("token replay detected")
-	ErrMissingKeyID   = errors.New("missing signing key id")
+	ErrInvalidToken    = errors.New("invalid token")
+	ErrReplayDetected  = errors.New("token replay detected")
+	ErrMissingKeyID    = errors.New("missing signing key id")
+	ErrInvalidDecision = errors.New("invalid permit decision")
 )
 
 type ReplayCache interface {
@@ -86,7 +91,9 @@ type Claims struct {
 
 type IssuerVerifier struct {
 	activeKeyID string
-	keys        map[string][]byte
+	hmacKeys    map[string][]byte
+	rsaPrivate  map[string]*rsa.PrivateKey
+	rsaPublic   map[string]*rsa.PublicKey
 	issuer      string
 	ttl         time.Duration
 	replay      ReplayCache
@@ -127,12 +134,97 @@ func NewIssuerVerifierWithKeys(keys map[string][]byte, activeKeyID, issuer strin
 
 	return &IssuerVerifier{
 		activeKeyID: activeKeyID,
-		keys:        normalizedKeys,
+		hmacKeys:    normalizedKeys,
 		issuer:      issuer,
 		ttl:         ttl,
 		replay:      replay,
 		now:         time.Now,
 	}
+}
+
+// NewIssuerVerifierWithRS256PrivateKeys signs execution permits with the
+// active RSA private key and verifies them with the corresponding public key.
+// Give executors the public keys through NewVerifierWithRS256PublicKeys so
+// they never need the permit-signing private material.
+func NewIssuerVerifierWithRS256PrivateKeys(keys map[string]*rsa.PrivateKey, activeKeyID, issuer string, ttl time.Duration, replay ReplayCache) *IssuerVerifier {
+	privateKeys := make(map[string]*rsa.PrivateKey, len(keys))
+	publicKeys := make(map[string]*rsa.PublicKey, len(keys))
+	for keyID, key := range keys {
+		if keyID == "" || key == nil || !validRS256PublicKey(&key.PublicKey) {
+			continue
+		}
+		privateKeys[keyID] = key
+		publicKeys[keyID] = &key.PublicKey
+	}
+	return newRS256IssuerVerifier(privateKeys, publicKeys, activeKeyID, issuer, ttl, replay)
+}
+
+// NewVerifierWithRS256PublicKeys verifies RS256 execution permits without any
+// signing capability. Calling Issue on the returned value fails closed.
+func NewVerifierWithRS256PublicKeys(keys map[string]*rsa.PublicKey, issuer string, replay ReplayCache) *IssuerVerifier {
+	publicKeys := make(map[string]*rsa.PublicKey, len(keys))
+	for keyID, key := range keys {
+		if keyID == "" || !validRS256PublicKey(key) {
+			continue
+		}
+		publicKeys[keyID] = key
+	}
+	return newRS256IssuerVerifier(nil, publicKeys, "", issuer, 2*time.Minute, replay)
+}
+
+func validRS256PublicKey(key *rsa.PublicKey) bool {
+	return key != nil && key.N != nil && key.N.BitLen() >= 2048 && key.E >= 3 && key.E%2 == 1
+}
+
+func newRS256IssuerVerifier(privateKeys map[string]*rsa.PrivateKey, publicKeys map[string]*rsa.PublicKey, activeKeyID, issuer string, ttl time.Duration, replay ReplayCache) *IssuerVerifier {
+	if ttl <= 0 {
+		ttl = 2 * time.Minute
+	}
+	if replay == nil {
+		replay = NewMemoryReplayCache()
+	}
+	if activeKeyID == "" {
+		for keyID := range privateKeys {
+			activeKeyID = keyID
+			break
+		}
+	}
+	return &IssuerVerifier{
+		activeKeyID: activeKeyID,
+		rsaPrivate:  privateKeys,
+		rsaPublic:   publicKeys,
+		issuer:      issuer,
+		ttl:         ttl,
+		replay:      replay,
+		now:         time.Now,
+	}
+}
+
+// ParseRS256PrivateKeyPEM accepts standard PKCS#1 and PKCS#8 RSA private-key
+// PEM encodings used by secret managers and workload mounts.
+func ParseRS256PrivateKeyPEM(raw []byte) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, ErrInvalidToken
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		if !validRS256PublicKey(&key.PublicKey) {
+			return nil, ErrInvalidToken
+		}
+		return key, nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	if !validRS256PublicKey(&rsaKey.PublicKey) {
+		return nil, ErrInvalidToken
+	}
+	return rsaKey, nil
 }
 
 func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Decision) (string, error) {
@@ -143,6 +235,10 @@ func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Deci
 		attribute.String("decision_id", decision.DecisionID),
 	)
 	defer span.End()
+	if !decision.Allow || strings.TrimSpace(decision.DecisionID) == "" {
+		span.RecordError(ErrInvalidDecision)
+		return "", ErrInvalidDecision
+	}
 
 	requestHash, err := req.Hash()
 	if err != nil {
@@ -169,10 +265,19 @@ func (i *IssuerVerifier) Issue(req schema.CanonicalRequest, decision schema.Deci
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	var method jwt.SigningMethod = jwt.SigningMethodHS256
+	var signingKey any
+	if privateKey := i.rsaPrivate[i.activeKeyID]; privateKey != nil {
+		method = jwt.SigningMethodRS256
+		signingKey = privateKey
+	} else if secret := i.hmacKeys[i.activeKeyID]; len(secret) > 0 {
+		signingKey = secret
+	} else {
+		return "", ErrInvalidToken
+	}
+	token := jwt.NewWithClaims(method, claims)
 	token.Header["kid"] = i.activeKeyID
-	secret := i.keys[i.activeKeyID]
-	return token.SignedString(secret)
+	return token.SignedString(signingKey)
 }
 
 func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.CanonicalRequest) (*Claims, error) {
@@ -184,18 +289,25 @@ func (i *IssuerVerifier) Verify(ctx context.Context, token string, req schema.Ca
 	defer span.End()
 
 	parsedToken, err := jwt.ParseWithClaims(token, &Claims{}, func(parsedToken *jwt.Token) (any, error) {
-		if parsedToken.Method != jwt.SigningMethodHS256 {
-			return nil, ErrInvalidToken
-		}
 		keyID, _ := parsedToken.Header["kid"].(string)
 		if keyID == "" {
 			return nil, ErrMissingKeyID
 		}
-		secret, ok := i.keys[keyID]
-		if !ok {
-			return nil, ErrInvalidToken
+		if parsedToken.Method == jwt.SigningMethodHS256 {
+			secret := i.hmacKeys[keyID]
+			if len(secret) == 0 {
+				return nil, ErrInvalidToken
+			}
+			return secret, nil
 		}
-		return secret, nil
+		if parsedToken.Method == jwt.SigningMethodRS256 {
+			publicKey := i.rsaPublic[keyID]
+			if publicKey == nil {
+				return nil, ErrInvalidToken
+			}
+			return publicKey, nil
+		}
+		return nil, ErrInvalidToken
 	}, jwt.WithIssuer(i.issuer), jwt.WithAudience("arbiter-tool-execution"))
 	if err != nil {
 		span.RecordError(err)

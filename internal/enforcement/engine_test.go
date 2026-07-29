@@ -78,6 +78,21 @@ func TestEnginePreservesPolicyDenyDecision(t *testing.T) {
 	}
 }
 
+func TestEngineNeverIssuesPermitForFalseDecisionWithoutDenyError(t *testing.T) {
+	t.Parallel()
+	engine := newTestEngine(state.NewMemoryStore(), deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {
+		return schema.Decision{Allow: false, DecisionID: req.Metadata.RequestID, Reason: "explicit deny"}, nil
+	}))
+
+	result, err := engine.Enforce(context.Background(), testRequest())
+	if !IsDenied(err) {
+		t.Fatalf("expected explicit false decision to deny, got %v", err)
+	}
+	if result.Token != "" || result.Decision.Allow {
+		t.Fatalf("deny decision must not mint a permit: %#v", result)
+	}
+}
+
 func TestEngineLoadsLegacyRequiredContext(t *testing.T) {
 	t.Parallel()
 	store := state.NewMemoryStore()

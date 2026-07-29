@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -65,6 +65,14 @@ function decodeJWTPayload<T>(token: string): T {
   return JSON.parse(decodeBase64URL(parts[1]).toString("utf8")) as T;
 }
 
+function decodeJWTHeader<T>(token: string): T {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    throw new Error("invalid JWT shape");
+  }
+  return JSON.parse(decodeBase64URL(parts[0]).toString("utf8")) as T;
+}
+
 async function unpackTarGz(archive: Buffer): Promise<Map<string, Buffer>> {
   const files = new Map<string, Buffer>();
   const extract = tar.extract();
@@ -109,7 +117,15 @@ describe("bundle archive regression coverage", () => {
       "ARBITER_POLICY_ROOT",
       "ARBITER_BUNDLE_SIGNING_SECRET",
       "ARBITER_BUNDLE_SIGNING_KEY_ID",
-      "ARBITER_BUNDLE_SIGNING_SCOPE"
+      "ARBITER_BUNDLE_SIGNING_SCOPE",
+      "ARBITER_BUNDLE_SIGNING_ALGORITHM",
+      "ARBITER_BUNDLE_SIGNER_URL",
+      "ARBITER_BUNDLE_SIGNER_TOKEN",
+      "ARBITER_BUNDLE_SIGNER_TIMEOUT_MS",
+      "ARBITER_CAPABILITY_ALGORITHM",
+      "ARBITER_CAPABILITY_PRIVATE_KEY",
+      "ARBITER_CAPABILITY_SECRET",
+      "ARBITER_CAPABILITY_KID"
     ] as const;
 
     for (const key of trackedEnv) {
@@ -124,6 +140,7 @@ describe("bundle archive regression coverage", () => {
     process.env.ARBITER_BUNDLE_SIGNING_SECRET = "bundle-test-secret";
     process.env.ARBITER_BUNDLE_SIGNING_KEY_ID = "bundle_test_hs256";
     process.env.ARBITER_BUNDLE_SIGNING_SCOPE = "read";
+    process.env.ARBITER_BUNDLE_SIGNING_ALGORITHM = "HS256";
 
     const { getChannelArchive } = await import("./store");
     const archive = await getChannelArchive("prod");
@@ -188,5 +205,131 @@ describe("bundle archive regression coverage", () => {
 
     const snapshotRaw = files.get("snapshot.json") as Buffer;
     expect(hashes.get("snapshot.json")).toBe(sha256Hex(snapshotRaw));
+  });
+
+  it("signs bundles with RS256 without distributing the private key to verifiers", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    process.env.ARBITER_BUNDLE_SIGNING_ALGORITHM = "RS256";
+    process.env.ARBITER_BUNDLE_SIGNING_KEY_ID = "bundle_test_rs256";
+    process.env.ARBITER_BUNDLE_SIGNING_SECRET = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+    const { getChannelArchive } = await import("./store");
+    const archive = await getChannelArchive("prod");
+    if (!archive) {
+      throw new Error("expected prod archive");
+    }
+    const rsFiles = await unpackTarGz(archive.content);
+    const signatureDoc = JSON.parse((rsFiles.get(".signatures.json") as Buffer).toString("utf8")) as {
+      signatures: string[];
+    };
+    const signature = signatureDoc.signatures[0];
+    const [header, payload, encodedSignature] = signature.split(".");
+
+    expect(decodeJWTHeader<{ alg: string; kid: string }>(signature)).toEqual({
+      alg: "RS256",
+      typ: "JWT",
+      kid: "bundle_test_rs256"
+    });
+    expect(
+      verify(
+        "RSA-SHA256",
+        Buffer.from(`${header}.${payload}`, "utf8"),
+        publicKey,
+        decodeBase64URL(encodedSignature)
+      )
+    ).toBe(true);
+  });
+
+  it("signs RS256 capability grants for gateways that hold only the public key", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    process.env.ARBITER_CAPABILITY_ALGORITHM = "RS256";
+    process.env.ARBITER_CAPABILITY_PRIVATE_KEY = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    process.env.ARBITER_CAPABILITY_KID = "capability_test_rs256";
+    delete process.env.ARBITER_CAPABILITY_SECRET;
+
+    const { signCapabilityGrant } = await import("./store");
+    const token = signCapabilityGrant({
+      id: "capability_test_grant",
+      name: "RS256 test grant",
+      subject: "agent-1",
+      serverIds: ["payments"],
+      toolNames: ["refund"],
+      mayDelegate: false,
+      createdBy: "test",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:00:00.000Z"
+    });
+    const [header, payload, encodedSignature] = token.split(".");
+
+    expect(decodeJWTHeader<{ alg: string; kid: string }>(token)).toEqual({
+      alg: "RS256",
+      typ: "JWT",
+      kid: "capability_test_rs256"
+    });
+    expect(
+      verify(
+        "RSA-SHA256",
+        Buffer.from(`${header}.${payload}`, "utf8"),
+        publicKey,
+        decodeBase64URL(encodedSignature)
+      )
+    ).toBe(true);
+  });
+
+  it("uses an external RS256 signer without loading private-key material", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const originalFetch = globalThis.fetch;
+    process.env.ARBITER_BUNDLE_SIGNING_ALGORITHM = "RS256";
+    process.env.ARBITER_BUNDLE_SIGNING_KEY_ID = "kms-backed-bundle-key";
+    process.env.ARBITER_BUNDLE_SIGNER_URL = "https://signer.example.test/v1/sign";
+    process.env.ARBITER_BUNDLE_SIGNER_TOKEN = "test-signer-token";
+    process.env.ARBITER_BUNDLE_SIGNER_TIMEOUT_MS = "500";
+    delete process.env.ARBITER_BUNDLE_SIGNING_SECRET;
+
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as {
+        version: string;
+        algorithm: string;
+        key_id: string;
+        signing_input: string;
+      };
+      expect(init?.headers).toMatchObject({ Authorization: "Bearer test-signer-token" });
+      expect(request).toMatchObject({ version: "v1", algorithm: "RS256", key_id: "kms-backed-bundle-key" });
+      return new Response(
+        JSON.stringify({ signature: sign("RSA-SHA256", Buffer.from(request.signing_input, "utf8"), privateKey).toString("base64url") }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const { getChannelArchive } = await import("./store");
+      const archive = await getChannelArchive("prod");
+      if (!archive) {
+        throw new Error("expected prod archive");
+      }
+      const externalFiles = await unpackTarGz(archive.content);
+      const signatureDoc = JSON.parse((externalFiles.get(".signatures.json") as Buffer).toString("utf8")) as {
+        signatures: string[];
+      };
+      const signature = signatureDoc.signatures[0];
+      const [header, payload, encodedSignature] = signature.split(".");
+      expect(decodeJWTHeader<{ alg: string; kid: string }>(signature)).toEqual({
+        alg: "RS256",
+        typ: "JWT",
+        kid: "kms-backed-bundle-key"
+      });
+      expect(
+        verify(
+          "RSA-SHA256",
+          Buffer.from(`${header}.${payload}`, "utf8"),
+          publicKey,
+          decodeBase64URL(encodedSignature)
+        )
+      ).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

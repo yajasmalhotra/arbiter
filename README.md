@@ -48,8 +48,12 @@ and capability grant to the execution permit.
 
 For a signed workload-JWT deployment, set `ARBITER_MCP_JWT_SECRET`,
 `ARBITER_MCP_JWT_ISSUER`, and `ARBITER_MCP_JWT_AUDIENCE`. To enforce scoped
-grants, set `ARBITER_CAPABILITY_SECRET` and `ARBITER_REQUIRE_CAPABILITY=true`;
-the caller then sends a grant in `X-Arbiter-Capability`. Delegation chains are
+grants in production, set `ARBITER_CAPABILITY_ALGORITHM=RS256`, keep
+`ARBITER_CAPABILITY_PRIVATE_KEY` only on the control plane, give each MCP
+gateway the matching `ARBITER_CAPABILITY_PUBLIC_KEY`, and set
+`ARBITER_REQUIRE_CAPABILITY=true`; the caller then sends a grant in
+`X-Arbiter-Capability`. `ARBITER_CAPABILITY_SECRET` remains supported for
+HS256 local development and backwards compatibility. Delegation chains are
 enabled with `ARBITER_DELEGATION_SECRET` and use
 `X-Arbiter-Delegation: <parent-link>,<child-link>`.
 
@@ -65,6 +69,12 @@ durable in Postgres and fanned out automatically with the grant ID and original
 expiry; the gateway writes the shared Redis revocation marker immediately.
 Without these settings, operators can call that endpoint directly to synchronize
 active gateways.
+
+Set `ARBITER_PRODUCTION_MODE=true` on an MCP gateway to enforce its strict
+enterprise baseline: authenticated workload identity, RS256 execution permits,
+Redis-backed replay and state, durable Postgres audit, inbound gateway and
+revocation service keys, and required RS256 capability grants. This startup
+check deliberately rejects static-agent and shared-HMAC capability defaults.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates
@@ -100,8 +110,8 @@ grant scoped to a tenant, subject, MCP server, tool, and optional `amount_cents`
 limit. A grant may also bind to an authenticated workload identity (for example,
 a SPIFFE URI from mTLS or a workload-JWT claim), so copying the token to a
 different workload does not confer authority. Capability grants narrow authority
-and never override Rego policy. Delegated calls additionally require a grant
-marked as delegable.
+and never override Rego policy. RS256 lets gateways verify grants with a public
+key only; delegated calls additionally require a grant marked as delegable.
 
 ## Who It Is For
 
@@ -324,15 +334,29 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 ## Enterprise Evaluation Notes
 
 - The control plane is not in the decision hot path. Arbiter can continue enforcing with local OPA even if the UI is unavailable.
-- Policies are distributed as signed bundles. OPA fetches them from the control plane with a service token and verifies signatures before activation.
+- Policies are distributed as signed bundles. OPA fetches them from the control plane with a service token and verifies signatures before activation. The control plane supports RS256 bundle signatures so production verifiers can receive only a public key; persisted signing keys are AES-256-GCM encrypted, while HS256 remains for local compatibility.
+- Enterprises can keep bundle private keys completely outside Arbiter with the KMS/HSM-compatible external signer contract; bundle creation fails closed if the signer is unavailable or returns an invalid signature.
 - Execution requires two checks: intercept-time allow and execution-time token verification.
+- Execution permits support RS256: production interceptors sign with a private
+  key while isolated executors can verify using only the corresponding public
+  key. HS256 remains the local-development default.
+- Set `ARBITER_PRODUCTION_MODE=true` to make startup enforce a production
+  baseline: workload identity, RS256 permits, Redis-backed replay/state,
+  Postgres audit, and a service-boundary key must all be configured.
 - Decisions are traceable by decision ID, policy version, data revision, request ID, and trace ID.
 - Production bundle promotion and rollback can be approval-gated in the control plane.
+- Production approval uses separation of duties: the requester cannot approve their own rollout or rollback.
 - The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
 - The control plane supports signed, tenant-scoped operator identities with
   role claims; those trusted claims override browser-controlled tenant and role
   headers for multi-tenant governance. It can validate RS256 tokens directly
   against an enterprise OIDC JWKS or use an internal gateway-issued HS256 token.
+- HTTP interception can likewise validate a workload OIDC/JWT and replaces
+  envelope-supplied tenant and actor values before policy evaluation, so a
+  provider payload never becomes the authorization identity. Set
+  `ARBITER_REQUIRE_WORKLOAD_IDENTITY=true` to reject all HTTP interception
+  traffic until one of those identity modes is configured; `/readyz` also
+  reports unhealthy until the identity configuration is complete.
 
 ## Current Limits
 

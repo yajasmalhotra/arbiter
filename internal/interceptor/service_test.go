@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"arbiter/internal/executorauth"
+	"arbiter/internal/identity"
 	"arbiter/internal/pdp"
 	"arbiter/internal/schema"
 	"arbiter/internal/state"
@@ -167,6 +168,25 @@ func TestServiceReadyzReturnsUnavailableWhenDeciderNotReady(t *testing.T) {
 	}
 }
 
+func TestServiceReadyzReturnsUnavailableWhenRequiredWorkloadIdentityIsMissing(t *testing.T) {
+	t.Parallel()
+
+	service := newTestServiceWithConfig(
+		pdp.StaticDecider{Decision: defaultAllowDecision("decision-readiness-identity")},
+		state.NewMemoryStore(),
+		Config{RequireAuthenticatedPrincipal: true},
+	)
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for missing required workload identity, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestServiceInterceptOpenAIRequiresGatewayKeyWhenConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -187,6 +207,13 @@ func TestServiceInterceptOpenAIRequiresGatewayKeyWhenConfigured(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without header, got %d", recorder.Code)
 	}
+	wrongKeyReq := newJSONRequest(http.MethodPost, "/v1/intercept/openai", body)
+	wrongKeyReq.Header.Set("X-Arbiter-Gateway-Key", "gateway-secret-extra")
+	wrongKeyRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(wrongKeyRecorder, wrongKeyReq)
+	if wrongKeyRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with wrong gateway key, got %d", wrongKeyRecorder.Code)
+	}
 
 	authorizedReq := newJSONRequest(http.MethodPost, "/v1/intercept/openai", body)
 	authorizedReq.Header.Set("X-Arbiter-Gateway-Key", "gateway-secret")
@@ -194,6 +221,62 @@ func TestServiceInterceptOpenAIRequiresGatewayKeyWhenConfigured(t *testing.T) {
 	mux.ServeHTTP(authorizedRecorder, authorizedReq)
 	if authorizedRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 with gateway key, got %d: %s", authorizedRecorder.Code, authorizedRecorder.Body.String())
+	}
+}
+
+func TestServiceInterceptBindsVerifiedWorkloadIdentity(t *testing.T) {
+	t.Parallel()
+
+	var received schema.CanonicalRequest
+	service := newTestServiceWithConfig(
+		deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {
+			received = req
+			return defaultAllowDecision("decision-workload-identity"), nil
+		}),
+		state.NewMemoryStore(),
+		Config{Authenticator: identity.StaticAuthenticator{Principal: schema.Principal{
+			Subject:  "spiffe://prod.example/ns/payments/sa/refund-agent",
+			TenantID: "payments-prod",
+			Kind:     "workload",
+		}}},
+	)
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+	envelope := defaultOpenAIEnvelope()
+	envelope.Metadata.TenantID = "forged-tenant"
+	envelope.AgentContext.Actor = schema.Actor{ID: "forged-actor", Roles: []string{"admin"}}
+	req := newJSONRequest(http.MethodPost, "/v1/intercept/openai", envelope)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected authenticated intercept to succeed, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if received.Metadata.TenantID != "payments-prod" || received.AgentContext.Actor.ID != "spiffe://prod.example/ns/payments/sa/refund-agent" {
+		t.Fatalf("verified identity did not replace envelope identity: %#v", received)
+	}
+	if received.Principal == nil || received.Principal.AuthMethod != "static" || received.Principal.TenantID != "payments-prod" {
+		t.Fatalf("expected verified principal in policy input, got %#v", received.Principal)
+	}
+}
+
+func TestServiceInterceptFailsClosedWhenWorkloadIdentityIsRequired(t *testing.T) {
+	t.Parallel()
+
+	service := newTestServiceWithConfig(
+		pdp.StaticDecider{Decision: defaultAllowDecision("decision-require-workload-identity")},
+		state.NewMemoryStore(),
+		Config{RequireAuthenticatedPrincipal: true},
+	)
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+	req := newJSONRequest(http.MethodPost, "/v1/intercept/openai", defaultOpenAIEnvelope())
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when workload identity is required, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 

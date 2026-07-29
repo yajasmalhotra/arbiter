@@ -100,31 +100,83 @@ bearer token in Connection Settings and stores the token in a same-site cookie
 so server-rendered pages can establish the same tenant context. Header RBAC remains for development and
 requires `CONTROL_PLANE_API_KEY` when enabled.
 
+The persistence facade also propagates that authoritative actor through its
+local fallback paths. A supplied `actor` request field is therefore useful only
+for trusted server-side jobs when no signed identity context exists; it cannot
+impersonate an authenticated operator.
+
 Bundle service tokens are also tenant-bound: the OPA artifact and manifest
 routes derive the store tenant from the validated token hash rather than a
 request header or process-default tenant.
+
+### Tamper-evident audit evidence
+
+Postgres-backed audit events are chained per tenant using SHA-256 hashes over a
+canonical event payload and the preceding event hash. Concurrent writes take a
+tenant advisory lock so the chain has one deterministic order. Use
+`GET /api/audit/verify` with viewer access to verify the current tenant's
+chain. Events that predate migration `0005_audit_integrity.sql` remain visible
+but are reported as unsealed legacy history; local JSON development storage
+does not provide audit-chain verification.
 
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.
 - `POST /api/bundles/channels/prod/rollback` creates a pending approval request.
 - Direct prod activation/rollback is blocked until an approver executes `/api/approvals/:id/approve`.
+- A production requester cannot approve their own request. The control plane
+  enforces this separation of duties in the store transaction, so it holds for
+  API and dashboard clients alike.
 
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
 Published bundle archives include `.signatures.json` and are signed by the active signing key.
-In Postgres mode, manage keys with the signing-key APIs; in fallback mode, signing uses:
+For enterprise deployment, create an `RS256` signing key (or set the bootstrap
+algorithm to `RS256`). The control plane keeps the PEM-encoded RSA private key;
+each OPA verifier receives only the matching public key through its own trusted
+deployment configuration. That avoids sharing a bundle-signing secret with every
+verifier. Configure OPA with the matching key ID, `algorithm: RS256`, and public
+key under `keys.<key-id>.key`; keep key rollout and verifier configuration
+separate from bundle delivery.
 
+`HS256` is retained for local development and backward compatibility, but it
+requires every verifier to hold the same signing secret. In Postgres mode,
+signing-key material is encrypted at rest with AES-256-GCM and bound to its
+tenant and key ID. `ARBITER_SIGNING_KEY_ENCRYPTION_KEY` must be a unique,
+base64-encoded 32-byte value supplied through your secret manager; it is
+required by default in production. Existing plaintext records must be rotated
+after enabling encryption. In fallback mode, signing uses:
+
+- `ARBITER_BUNDLE_SIGNING_ALGORITHM` (`HS256` default; use `RS256` for enterprise)
 - `ARBITER_BUNDLE_SIGNING_KEY_ID`
 - `ARBITER_BUNDLE_SIGNING_SCOPE`
-- `ARBITER_BUNDLE_SIGNING_SECRET`
+- `ARBITER_BUNDLE_SIGNING_SECRET` (RSA private-key PEM for `RS256`)
+- `ARBITER_SIGNING_KEY_ENCRYPTION_KEY` (required for Postgres signing-key storage in production)
 
-Capability grants require `ARBITER_CAPABILITY_SECRET` and are available only
-with Postgres persistence. Creating a grant returns its signed credential once;
-the response record contains only non-secret metadata. A grant can optionally
-be tied to a workload identity (such as a SPIFFE URI) that the MCP gateway has
-authenticated through mTLS or a workload JWT. Configure MCP gateways with the
-same capability signing settings and use Redis-backed revocation for distributed
-invalidation.
+### External KMS/HSM signer
+
+For the strongest production boundary, configure
+`ARBITER_BUNDLE_SIGNER_URL` with an HTTPS signing service backed by your KMS or
+HSM and set `ARBITER_BUNDLE_SIGNING_ALGORITHM=RS256`. Arbiter sends a
+request containing the JWT signing input, key ID, algorithm, and scope; the
+service responds with JSON of the form
+`{"signature":"<base64url RS256 signature>"}`. Use
+`ARBITER_BUNDLE_SIGNER_TOKEN` to authenticate the request and
+`ARBITER_BUNDLE_SIGNER_TIMEOUT_MS` (default `3000`) to bound the call. When
+this integration is enabled, bundle generation does not load or persist a
+private signing key. The signer URL must use HTTPS in production, and failures
+fail closed rather than emitting an unsigned bundle.
+
+Capability grants are available only with Postgres persistence. In production,
+set `ARBITER_CAPABILITY_ALGORITHM=RS256` and provide the PEM-encoded
+`ARBITER_CAPABILITY_PRIVATE_KEY` only to the control plane. Configure each MCP
+gateway with the matching `ARBITER_CAPABILITY_PUBLIC_KEY` and the same key ID,
+issuer, and audience; gateways then verify grants without holding signing
+material. HS256 via `ARBITER_CAPABILITY_SECRET` remains supported for local
+development and existing deployments. Creating a grant returns its signed
+credential once; the response record contains only non-secret metadata. A grant
+can optionally be tied to a workload identity (such as a SPIFFE URI) that the
+MCP gateway has authenticated through mTLS or a workload JWT. Use Redis-backed
+revocation for distributed invalidation.
 
 For automatic runtime invalidation, configure
 `ARBITER_CAPABILITY_REVOCATION_ENDPOINTS` with comma-separated gateway
