@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { listAuditEvents, listPolicies, verifyAuditIntegrity } from "@/lib/store";
+import { listAuditEvents, listPolicies, listRuntimeDecisionEvents, verifyAuditIntegrity } from "@/lib/store";
 import { auditActionLabel, formatTimestamp, rolloutLabel } from "@/lib/presentation";
 import { establishControlPlanePageContext } from "@/lib/server-identity";
 import { runWithControlPlaneRequestContext } from "@/lib/context";
@@ -28,7 +28,7 @@ export default async function HomePage() {
       </div>
     );
   }
-  const [policies, auditEvents, auditIntegrity] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity()]));
+  const [policies, auditEvents, auditIntegrity, runtimeDecisions] = await runWithControlPlaneRequestContext(context, () => Promise.all([listPolicies(), listAuditEvents(), verifyAuditIntegrity(), listRuntimeDecisionEvents()]));
   const byState = policies.reduce<Record<string, number>>((acc, policy) => {
     acc[policy.rolloutState] = (acc[policy.rolloutState] || 0) + 1;
     return acc;
@@ -117,6 +117,37 @@ export default async function HomePage() {
             ? `Latest tenant chain hash: ${auditIntegrity.latestHash}`
             : auditIntegrity.failure ?? "No Postgres-backed audit events have been sealed yet."}
           {auditIntegrity.unsealedLegacyEvents > 0 && <p className="mt-1">{auditIntegrity.unsealedLegacyEvents} legacy events are visible but predate audit sealing.</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Recent runtime decisions</CardTitle>
+          <CardDescription>Tenant-scoped allow and deny outcomes from connected enforcement gateways</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {runtimeDecisions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No runtime decisions have been recorded yet.</p>
+          ) : (
+            <ul className="space-y-3">
+              {runtimeDecisions.map((decision) => (
+                <li key={decision.id} className="flex flex-wrap items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={decision.allowed === false ? "destructive" : "secondary"}>{decision.allowed === false ? "Denied" : decision.allowed === true ? "Allowed" : "Recorded"}</Badge>
+                      <span className="font-mono text-xs">{decision.toolName ?? "unknown tool"}</span>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">{decision.reason ?? "No decision reason recorded"}</p>
+                    {decision.decisionId && <p className="mt-1 font-mono text-xs text-muted-foreground">{decision.decisionId}</p>}
+                  </div>
+                  <div className="text-right text-xs text-muted-foreground">
+                    <p>{formatTimestamp(decision.at)}</p>
+                    {decision.latencyMs !== undefined && <p>{Math.round(decision.latencyMs)} ms</p>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
 

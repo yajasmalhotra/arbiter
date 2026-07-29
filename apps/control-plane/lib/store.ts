@@ -31,6 +31,7 @@ import type {
   DataRevision,
   PolicyRecord,
   PolicyRevision,
+  RuntimeDecisionEvent,
   RolloutState,
   SigningKey,
   ServiceToken
@@ -1457,6 +1458,54 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
       });
     },
     async () => legacy.listAuditEvents()
+  );
+}
+
+function runtimeMetadata(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      return asObject(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  return asObject(value);
+}
+
+export function runtimeDecisionEventFromRow(row: Record<string, unknown>): RuntimeDecisionEvent {
+  const metadata = runtimeMetadata(row.metadata);
+  const latency = Number(metadata.latency_ms);
+  return {
+    id: String(row.id),
+    at: toISOString(row.at),
+    decisionId: typeof metadata.decision_id === "string" ? metadata.decision_id : undefined,
+    requestId: typeof metadata.request_id === "string" ? metadata.request_id : undefined,
+    traceId: typeof metadata.trace_id === "string" ? metadata.trace_id : undefined,
+    toolName: typeof metadata.tool_name === "string" ? metadata.tool_name : undefined,
+    allowed: typeof metadata.allow === "boolean" ? metadata.allow : undefined,
+    reason: typeof metadata.reason === "string" ? metadata.reason : undefined,
+    policyVersion: typeof metadata.policy_version === "string" ? metadata.policy_version : undefined,
+    latencyMs: Number.isFinite(latency) ? latency : undefined
+  };
+}
+
+export async function listRuntimeDecisionEvents(limit = 10): Promise<RuntimeDecisionEvent[]> {
+  const boundedLimit = Math.max(1, Math.min(Math.floor(limit) || 10, 100));
+  return withDbOrFallback(
+    async (db) => {
+      const result = await db.query(
+        `
+          SELECT id, at, metadata
+          FROM runtime_audit_events
+          WHERE tenant_id = $1 AND action = 'intercept_decision'
+          ORDER BY at DESC, id DESC
+          LIMIT $2
+        `,
+        [defaultTenantId(), boundedLimit]
+      );
+      return result.rows.map((row) => runtimeDecisionEventFromRow(row as Record<string, unknown>));
+    },
+    async () => []
   );
 }
 

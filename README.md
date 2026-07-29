@@ -88,6 +88,9 @@ Runtime enforcement decisions are persisted separately in `runtime_audit_events`
 so high-volume decision telemetry cannot add unsealed rows to the control
 plane's tamper-evident governance audit chain. Any dropped or failed runtime
 audit delivery makes readiness fail and removes the gateway from rotation.
+The dashboard's **Recent runtime decisions** card and
+`GET /api/runtime-audit?limit=10` provide tenant-scoped allow/deny visibility
+without exposing raw tool parameters.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates

@@ -33,6 +33,19 @@ export type AuditIntegrityReport = {
   failure?: string;
 };
 
+export type RuntimeDecisionEvent = {
+  id: string;
+  at: string;
+  decisionId?: string;
+  requestId?: string;
+  traceId?: string;
+  toolName?: string;
+  allowed?: boolean;
+  reason?: string;
+  policyVersion?: string;
+  latencyMs?: number;
+};
+
 export type PolicyRevision = {
   id: string;
   policyIds: string[];

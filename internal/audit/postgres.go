@@ -76,7 +76,7 @@ func (r *PostgresRecorder) ensureSchema(ctx context.Context) error {
 
 	if _, err := r.pool.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_runtime_audit_events_tenant_time
-		ON runtime_audit_events(tenant_id, at DESC)
+		ON runtime_audit_events(tenant_id, at DESC, id DESC)
 	`); err != nil {
 		return err
 	}
