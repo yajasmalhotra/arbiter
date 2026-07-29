@@ -338,6 +338,10 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 
 - The control plane is not in the decision hot path. Arbiter can continue enforcing with local OPA even if the UI is unavailable.
 - Policies are distributed as signed bundles. OPA fetches them from the control plane with a service token and verifies signatures before activation. The control plane supports RS256 bundle signatures so production verifiers can receive only a public key; persisted signing keys are AES-256-GCM encrypted, while HS256 remains for local compatibility.
+- In the reference Compose deployment, set `ARBITER_BUNDLE_VERIFYING_KEY` for
+  OPA separately from the control-plane `ARBITER_BUNDLE_SIGNING_SECRET`. With
+  RS256, OPA receives only the matching public key; with legacy HS256, both
+  values must be the same secret.
 - Enterprises can keep bundle private keys completely outside Arbiter with the KMS/HSM-compatible external signer contract; bundle creation fails closed if the signer is unavailable or returns an invalid signature.
 - Execution requires two checks: intercept-time allow and execution-time token verification.
 - Execution permits support RS256: production interceptors sign with a private

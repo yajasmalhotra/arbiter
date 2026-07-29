@@ -138,6 +138,12 @@ verifier. Configure OPA with the matching key ID, `algorithm: RS256`, and public
 key under `keys.<key-id>.key`; keep key rollout and verifier configuration
 separate from bundle delivery.
 
+For the reference Compose deployment, set `ARBITER_BUNDLE_VERIFYING_KEY` for
+OPA independently from `ARBITER_BUNDLE_SIGNING_SECRET`: it is the RSA public
+key for `RS256`, while legacy `HS256` requires the same shared secret in both
+variables. The Compose file never maps the control-plane signing private key
+into the OPA container for an RS256 deployment.
+
 `HS256` is retained for local development and backward compatibility, but it
 requires every verifier to hold the same signing secret. In Postgres mode,
 signing-key material is encrypted at rest with AES-256-GCM and bound to its

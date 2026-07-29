@@ -8,6 +8,7 @@ services:
       ARBITER_POLICY_ROOT: "/policy"
       ARBITER_BUNDLE_SERVICE_TOKEN: ${ARBITER_BUNDLE_SERVICE_TOKEN:-dev-bundle-token}
       ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES: ${ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES:-bundle:read}
+      ARBITER_BUNDLE_SIGNING_ALGORITHM: ${ARBITER_BUNDLE_SIGNING_ALGORITHM:-HS256}
       ARBITER_BUNDLE_SIGNING_KEY_ID: ${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}
       ARBITER_BUNDLE_SIGNING_SCOPE: ${ARBITER_BUNDLE_SIGNING_SCOPE:-read}
       ARBITER_BUNDLE_SIGNING_SECRET: ${ARBITER_BUNDLE_SIGNING_SECRET:-dev-bundle-signing-secret}
@@ -72,8 +73,10 @@ services:
       - "--set=bundles.arbiter.polling.max_delay_seconds=20"
       - "--set=bundles.arbiter.signing.keyid=${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}"
       - "--set=bundles.arbiter.signing.scope=${ARBITER_BUNDLE_SIGNING_SCOPE:-read}"
-      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.algorithm=HS256"
-      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.key=${ARBITER_BUNDLE_SIGNING_SECRET:-dev-bundle-signing-secret}"
+      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.algorithm=${ARBITER_BUNDLE_SIGNING_ALGORITHM:-HS256}"
+      # Deliberately distinct from ARBITER_BUNDLE_SIGNING_SECRET: OPA receives
+      # the RS256 public key, never the control-plane private key.
+      - "--set=keys.${ARBITER_BUNDLE_SIGNING_KEY_ID:-arbiter_bundle_hs256}.key=${ARBITER_BUNDLE_VERIFYING_KEY:-dev-bundle-signing-secret}"
     ports:
       - "8181:8181"
     depends_on:
