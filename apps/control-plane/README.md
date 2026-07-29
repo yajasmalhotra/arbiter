@@ -135,6 +135,13 @@ denial rate, and top denied tools. Automation can read the same tenant-scoped
 aggregate from `GET /api/runtime-audit/summary?hours=24`; the window is bounded
 between one hour and 30 days.
 
+Policy detail pages support live allow/deny assertions against a connected
+interceptor. The test endpoint requires viewer access and adopts the signed
+tenant context before loading a policy. In production, configure `ARBITER_URL`,
+`ARBITER_POLICY_TEST_GATEWAY_KEY`, and optionally
+`ARBITER_POLICY_TEST_BEARER_TOKEN`; arbitrary browser-supplied target overrides
+are disabled unless `ARBITER_ALLOW_TEST_URL_OVERRIDE=true`.
+
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.

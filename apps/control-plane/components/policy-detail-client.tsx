@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { ControlPlaneConnectionSettings } from "@/components/control-plane-connection-settings";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { controlPlaneHeaders } from "@/lib/control-plane-client";
 import { cn } from "@/lib/utils";
 import { DEFAULT_OPENAI_INTERCEPT_JSON } from "@/lib/sample-intercept";
+import type { PolicyTestAssertion, PolicyTestOutcome } from "@/lib/policy-validation";
 import type { PolicyRecord } from "@/lib/types";
 
 const INTERCEPT_OPTIONS: { value: string; label: string }[] = [
@@ -38,11 +40,16 @@ export function PolicyDetailClient({ policy }: Props) {
   const [interceptPath, setInterceptPath] = useState("/v1/intercept/openai");
   const [payloadText, setPayloadText] = useState(DEFAULT_OPENAI_INTERCEPT_JSON);
   const [arbiterBaseUrl, setArbiterBaseUrl] = useState("");
+  const [expectedOutcome, setExpectedOutcome] = useState<"" | "allow" | "deny">("");
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [observedOutcome, setObservedOutcome] = useState<PolicyTestOutcome | null>(null);
+  const [testAssertion, setTestAssertion] = useState<PolicyTestAssertion | null>(null);
   const [testing, setTesting] = useState(false);
 
   async function handleTest() {
     setTestResult(null);
+    setObservedOutcome(null);
+    setTestAssertion(null);
     let payload: unknown;
     try {
       payload = JSON.parse(payloadText);
@@ -61,10 +68,16 @@ export function PolicyDetailClient({ policy }: Props) {
         body: JSON.stringify({
           interceptPath,
           payload,
+          ...(expectedOutcome ? { expectedOutcome } : {}),
           ...(arbiterBaseUrl.trim() ? { arbiterBaseUrl: arbiterBaseUrl.trim() } : {})
         })
       });
-      const data = await res.json();
+      const data = (await res.json()) as {
+        observedOutcome?: PolicyTestOutcome;
+        assertion?: PolicyTestAssertion;
+      };
+      setObservedOutcome(data.observedOutcome ?? null);
+      setTestAssertion(data.assertion ?? null);
       setTestResult(JSON.stringify(data, null, 2));
     } catch (err) {
       setTestResult(
@@ -147,12 +160,13 @@ export function PolicyDetailClient({ policy }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Test against Arbiter</CardTitle>
+          <CardTitle>Validate policy behavior</CardTitle>
           <CardDescription>
             Sends a request to your running Arbiter interceptor (default{" "}
             <code className="rounded bg-muted px-1 text-xs">http://127.0.0.1:8080</code> unless{" "}
             <code className="rounded bg-muted px-1 text-xs">ARBITER_URL</code> is set, or use the override below).
-            This checks live policy behavior before rollout.
+            This validates the connected interceptor&apos;s current behavior. Publish or synchronize a
+            candidate before treating the result as release evidence.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -169,6 +183,19 @@ export function PolicyDetailClient({ policy }: Props) {
                   {o.label} ({o.value})
                 </option>
               ))}
+            </select>
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="expectedOutcome">Expected outcome</Label>
+            <select
+              id="expectedOutcome"
+              className={cn(selectClass, "max-w-lg")}
+              value={expectedOutcome}
+              onChange={(e) => setExpectedOutcome(e.target.value as "" | "allow" | "deny")}
+            >
+              <option value="">Observe only</option>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
             </select>
           </div>
           <div className="grid gap-2">
@@ -191,8 +218,37 @@ export function PolicyDetailClient({ policy }: Props) {
             />
           </div>
           <Button type="button" variant="secondary" onClick={handleTest} disabled={testing}>
-            {testing ? "Running…" : "Run test"}
+            {testing ? "Running…" : expectedOutcome ? "Run assertion" : "Run validation"}
           </Button>
+          {observedOutcome && (
+            <div
+              className={cn(
+                "rounded-md border p-3 text-sm",
+                testAssertion?.passed === false
+                  ? "border-destructive/40 bg-destructive/10"
+                  : testAssertion?.passed
+                    ? "border-emerald-500/30 bg-emerald-500/10"
+                    : "bg-muted/30"
+              )}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {testAssertion && (
+                  <Badge variant={testAssertion.passed ? "default" : "destructive"}>
+                    {testAssertion.passed ? "Passed" : "Failed"}
+                  </Badge>
+                )}
+                <span>
+                  Observed: <strong>{observedOutcome}</strong>
+                  {testAssertion && (
+                    <>
+                      {" "}
+                      · Expected: <strong>{testAssertion.expected}</strong>
+                    </>
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
           {testResult && (
             <pre className="max-h-96 overflow-auto rounded-md border bg-muted/50 p-4 text-xs leading-relaxed">
               {testResult}

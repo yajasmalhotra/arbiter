@@ -373,6 +373,8 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Production bundle promotion and rollback can be approval-gated in the control plane.
 - Operations shows a compact bundle change preview (policy and top-level data
   changes) before an operator requests a promotion.
+- Policy detail pages can assert an expected allow or deny outcome against the
+  connected interceptor and report a clear pass/fail result.
 - Production approval uses separation of duties: the requester cannot approve their own rollout or rollback.
 - The stack exposes metrics, tracing, and audit events for pilot validation and operational review.
 - The control plane supports signed, tenant-scoped operator identities with
