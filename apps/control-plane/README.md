@@ -119,6 +119,12 @@ chain. Events that predate migration `0005_audit_integrity.sql` remain visible
 but are reported as unsealed legacy history; local JSON development storage
 does not provide audit-chain verification.
 
+High-volume runtime enforcement decisions use the separate
+`runtime_audit_events` table. This keeps operational decision telemetry from
+introducing unsealed rows into the governance audit chain; gateway readiness
+fails if its bounded runtime-audit queue drops an event or Postgres persistence
+fails.
+
 Production channel safeguards:
 
 - `POST /api/bundles/:id/promote` with `channel=prod` creates a pending approval request.

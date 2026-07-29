@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -19,11 +20,13 @@ const (
 )
 
 type PostgresRecorder struct {
-	logger *slog.Logger
-	pool   *pgxpool.Pool
-	queue  chan Event
-	done   chan struct{}
-	closed atomic.Bool
+	logger  *slog.Logger
+	pool    *pgxpool.Pool
+	queue   chan Event
+	done    chan struct{}
+	closed  atomic.Bool
+	dropped atomic.Uint64
+	failed  atomic.Uint64
 }
 
 func NewPostgresRecorder(ctx context.Context, dsn string, queueSize int, logger *slog.Logger) (*PostgresRecorder, error) {
@@ -58,7 +61,7 @@ func (r *PostgresRecorder) ensureSchema(ctx context.Context) error {
 	}
 
 	if _, err := r.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS audit_events (
+		CREATE TABLE IF NOT EXISTS runtime_audit_events (
 			id TEXT PRIMARY KEY,
 			tenant_id TEXT NOT NULL DEFAULT 'default',
 			action TEXT NOT NULL,
@@ -72,8 +75,8 @@ func (r *PostgresRecorder) ensureSchema(ctx context.Context) error {
 	}
 
 	if _, err := r.pool.Exec(ctx, `
-		CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_time
-		ON audit_events(tenant_id, at DESC)
+		CREATE INDEX IF NOT EXISTS idx_runtime_audit_events_tenant_time
+		ON runtime_audit_events(tenant_id, at DESC)
 	`); err != nil {
 		return err
 	}
@@ -89,6 +92,7 @@ func (r *PostgresRecorder) Record(_ context.Context, event Event) {
 	select {
 	case r.queue <- event:
 	default:
+		r.dropped.Add(1)
 		if r.logger != nil {
 			r.logger.Warn("dropping audit event because postgres queue is full")
 		}
@@ -99,7 +103,21 @@ func (r *PostgresRecorder) Ready(ctx context.Context) error {
 	if r == nil || r.pool == nil || r.closed.Load() {
 		return errors.New("postgres audit recorder is not available")
 	}
+	if err := r.deliveryError(); err != nil {
+		return err
+	}
 	return r.pool.Ping(ctx)
+}
+
+func (r *PostgresRecorder) deliveryError() error {
+	if r == nil {
+		return errors.New("postgres audit recorder is not available")
+	}
+	dropped, failed := r.dropped.Load(), r.failed.Load()
+	if dropped == 0 && failed == 0 {
+		return nil
+	}
+	return fmt.Errorf("postgres audit delivery lost events (queue_dropped=%d persist_failed=%d)", dropped, failed)
 }
 
 func (r *PostgresRecorder) run() {
@@ -109,8 +127,11 @@ func (r *PostgresRecorder) run() {
 		ctx, cancel := context.WithTimeout(context.Background(), defaultPersistTimeout)
 		err := r.persist(ctx, event)
 		cancel()
-		if err != nil && r.logger != nil {
-			r.logger.Error("failed to persist audit event", "error", err)
+		if err != nil {
+			r.failed.Add(1)
+			if r.logger != nil {
+				r.logger.Error("failed to persist audit event", "error", err)
+			}
 		}
 	}
 }
@@ -146,7 +167,7 @@ func (r *PostgresRecorder) persist(ctx context.Context, event Event) error {
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO audit_events (id, tenant_id, action, actor, policy_id, at, metadata)
+		INSERT INTO runtime_audit_events (id, tenant_id, action, actor, policy_id, at, metadata)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
 	`,
 		uuid.NewString(),

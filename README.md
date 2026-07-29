@@ -78,6 +78,10 @@ check deliberately rejects static-agent and shared-HMAC capability defaults.
 The MCP gateway exposes `GET /healthz` for process liveness and `GET /readyz`
 for dependency readiness; the latter checks OPA, state, permit replay, and
 configured audit sinks before accepting traffic in a load-balancer rotation.
+Runtime enforcement decisions are persisted separately in `runtime_audit_events`
+so high-volume decision telemetry cannot add unsealed rows to the control
+plane's tamper-evident governance audit chain. Any dropped or failed runtime
+audit delivery makes readiness fail and removes the gateway from rotation.
 
 For production OIDC workloads, prefer `ARBITER_MCP_OIDC_ISSUER`,
 `ARBITER_MCP_OIDC_AUDIENCE`, and `ARBITER_MCP_OIDC_JWKS_URL`. Arbiter validates
