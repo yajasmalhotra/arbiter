@@ -144,17 +144,16 @@ func main() {
 			capabilityVerifier = &capability.Verifier{Keys: map[string][]byte{capabilityKeyID: []byte(secret)}, Issuer: capabilityIssuer, Audience: capabilityAudience, Revocations: newCapabilityRevocationStore()}
 		}
 	case "RS256":
-		rawPublicKey := strings.TrimSpace(os.Getenv("ARBITER_CAPABILITY_PUBLIC_KEY"))
-		if rawPublicKey == "" {
-			logger.Error("ARBITER_CAPABILITY_PUBLIC_KEY is required for RS256 capability verification")
-			os.Exit(1)
-		}
-		publicKey, err := capability.ParseRS256PublicKeyPEM([]byte(rawPublicKey))
+		publicKeys, err := loadRS256CapabilityPublicKeys(
+			capabilityKeyID,
+			os.Getenv("ARBITER_CAPABILITY_PUBLIC_KEY"),
+			os.Getenv("ARBITER_CAPABILITY_ADDITIONAL_PUBLIC_KEYS_JSON"),
+		)
 		if err != nil {
-			logger.Error("invalid ARBITER_CAPABILITY_PUBLIC_KEY", "error", err)
+			logger.Error("invalid RS256 capability verification keys", "error", err)
 			os.Exit(1)
 		}
-		capabilityVerifier = &capability.Verifier{RS256Keys: map[string]*rsa.PublicKey{capabilityKeyID: publicKey}, Issuer: capabilityIssuer, Audience: capabilityAudience, Revocations: newCapabilityRevocationStore()}
+		capabilityVerifier = &capability.Verifier{RS256Keys: publicKeys, Issuer: capabilityIssuer, Audience: capabilityAudience, Revocations: newCapabilityRevocationStore()}
 	default:
 		logger.Error("ARBITER_CAPABILITY_ALGORITHM must be HS256 or RS256")
 		os.Exit(1)

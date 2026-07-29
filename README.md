@@ -57,6 +57,12 @@ HS256 local development and backwards compatibility. Delegation chains are
 enabled with `ARBITER_DELEGATION_SECRET` and use
 `X-Arbiter-Delegation: <parent-link>,<child-link>`.
 
+For zero-downtime RS256 capability-key rotation, deploy the future public key
+to each gateway in `ARBITER_CAPABILITY_ADDITIONAL_PUBLIC_KEYS_JSON`, switch the
+control plane's `ARBITER_CAPABILITY_KID` and private key, wait for old grants to
+expire, then remove the prior public key. Gateways verify every configured key
+but never receive any signing private key.
+
 In Postgres control-plane deployments, approvers can create, list, and revoke
 these credentials at `/api/capability-grants`. The raw grant is returned only
 at creation time; revocation is audited. Set `ARBITER_REDIS_ADDR` on the MCP

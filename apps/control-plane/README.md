@@ -190,6 +190,12 @@ can optionally be tied to a workload identity (such as a SPIFFE URI) that the
 MCP gateway has authenticated through mTLS or a workload JWT. Use Redis-backed
 revocation for distributed invalidation.
 
+To rotate an RS256 capability key without invalidating active grants, first add
+the future public key to each gateway's
+`ARBITER_CAPABILITY_ADDITIONAL_PUBLIC_KEYS_JSON` map, then switch the control
+plane's `ARBITER_CAPABILITY_KID` and private key. Retain the old public key
+until all grants it signed have expired, then remove it from the map.
+
 For automatic runtime invalidation, configure
 `ARBITER_CAPABILITY_REVOCATION_ENDPOINTS` with comma-separated gateway
 `/v1/capabilities/revoke` URLs plus the matching `ARBITER_SERVICE_SHARED_KEY`.
