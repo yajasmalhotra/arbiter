@@ -27,10 +27,10 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -56,7 +56,7 @@ jobs:
         run: ./tools/release/build_arbiter_artifacts.sh "${{ steps.meta.outputs.version }}"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arbiter-release-dist
           path: dist/*
@@ -64,7 +64,7 @@ jobs:
 
       - name: Publish GitHub release
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.publish_release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Arbiter v${{ steps.meta.outputs.version }}
@@ -99,11 +99,11 @@ jobs:
 
       - name: Checkout
         if: steps.tap.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download release artifacts
         if: steps.tap.outputs.enabled == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: arbiter-release-dist
           path: dist

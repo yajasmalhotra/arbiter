@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -27,10 +27,10 @@ jobs:
       - repo-hygiene
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -38,9 +38,18 @@ jobs:
         run: go test ./...
 
       - name: Set up OPA
-        uses: open-policy-agent/setup-opa@v2
-        with:
-          version: 1.18.2
+        env:
+          OPA_VERSION: 1.18.2
+        run: |
+          opa_binary="${RUNNER_TEMP}/opa"
+          opa_checksum="${opa_binary}.sha256"
+          release_url="https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}"
+          curl -fsSL "${release_url}/opa_linux_amd64_static" -o "${opa_binary}"
+          curl -fsSL "${release_url}/opa_linux_amd64_static.sha256" -o "${opa_checksum}"
+          expected_checksum="$(cut -d ' ' -f 1 "${opa_checksum}")"
+          echo "${expected_checksum}  ${opa_binary}" | sha256sum --check -
+          chmod +x "${opa_binary}"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: Run policy tests
         run: opa test policy/core policy/domain policy/tests policy/data -v
@@ -54,10 +63,10 @@ jobs:
         working-directory: apps/control-plane
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -84,10 +93,10 @@ jobs:
         working-directory: integrations/openclaw-plugin
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -108,7 +117,7 @@ jobs:
       - control-plane
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run OPA bundle smoke test
         run: ./tools/ci/opa_bundle_smoke.sh
