@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -13,17 +14,50 @@ type Harness struct {
 	ID      string
 	Name    string
 	Channel string
+	Command string
 }
 
 var harnesses = []Harness{
-	{ID: "pi", Name: "Pi", Channel: "native extension"},
-	{ID: "openclaw", Name: "OpenClaw", Channel: "native plugin"},
-	{ID: "opencode", Name: "OpenCode", Channel: "native plugin"},
-	{ID: "claude-code", Name: "Claude Code", Channel: "native plugin"},
-	{ID: "gemini-cli", Name: "Gemini CLI", Channel: "MCP gateway"},
-	{ID: "goose", Name: "Goose", Channel: "MCP gateway"},
+	{ID: "pi", Name: "Pi", Channel: "native extension", Command: "pi"},
+	{ID: "openclaw", Name: "OpenClaw", Channel: "native plugin", Command: "openclaw"},
+	{ID: "opencode", Name: "OpenCode", Channel: "native plugin", Command: "opencode"},
+	{ID: "claude-code", Name: "Claude Code", Channel: "native plugin", Command: "claude"},
+	{ID: "gemini-cli", Name: "Gemini CLI", Channel: "MCP gateway", Command: "gemini"},
+	{ID: "goose", Name: "Goose", Channel: "MCP gateway", Command: "goose"},
 	{ID: "mcp", Name: "Another MCP harness", Channel: "MCP gateway"},
 	{ID: "custom", Name: "Custom hooks or executor", Channel: "HTTP or SDK"},
+}
+
+type Detection struct {
+	Harness Harness
+	Path    string
+}
+
+func Detect() []Detection {
+	return DetectWith(exec.LookPath)
+}
+
+func DetectWith(lookPath func(string) (string, error)) []Detection {
+	detected := make([]Detection, 0, len(harnesses))
+	for _, harness := range harnesses {
+		if harness.Command == "" {
+			continue
+		}
+		path, err := lookPath(harness.Command)
+		if err == nil {
+			detected = append(detected, Detection{Harness: harness, Path: path})
+		}
+	}
+	return detected
+}
+
+func IsDetected(harness Harness, detected []Detection) bool {
+	for _, candidate := range detected {
+		if candidate.Harness.ID == harness.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func Harnesses() []Harness {
@@ -50,10 +84,15 @@ func Resolve(value string) (Harness, error) {
 }
 
 func Prompt(input io.Reader, output io.Writer) (Harness, error) {
+	detected := Detect()
 	fmt.Fprintln(output, "Welcome to Arbiter. Let's guard your agent's tool calls.")
 	fmt.Fprintln(output, "\nWhich harness do you want to use?")
 	for index, harness := range harnesses {
-		fmt.Fprintf(output, "  %d) %-27s %s\n", index+1, harness.Name, harness.Channel)
+		status := ""
+		if IsDetected(harness, detected) {
+			status = " · detected"
+		}
+		fmt.Fprintf(output, "  %d) %-27s %s%s\n", index+1, harness.Name, harness.Channel, status)
 	}
 	fmt.Fprintf(output, "Select a harness [1-%d]: ", len(harnesses))
 
@@ -77,11 +116,32 @@ func PrintHarnesses(output io.Writer) {
 	}
 }
 
-func PrintPlan(output io.Writer, harness Harness, configPath, baseURL string) {
+func VerificationStep(harness Harness) string {
+	switch harness.ID {
+	case "pi":
+		return "start Pi and run /arbiter for a live protected-tool readiness check"
+	case "opencode":
+		return "start OpenCode and confirm @randromeda/arbiter-opencode loads without a plugin error"
+	case "claude-code":
+		return "start Claude Code and run /hooks; confirm all three Arbiter hooks have a Plugin source"
+	case "openclaw":
+		return "restart OpenClaw and confirm the arbiter-openclaw plugin is enabled"
+	case "gemini-cli", "goose", "mcp":
+		return "check the arbiter-mcp /readyz endpoint, then list tools through the configured MCP connection"
+	default:
+		return "send one allowed and one denied test call through the final execution boundary"
+	}
+}
+
+func PrintPlan(output io.Writer, harness Harness, configPath, baseURL string, runtimeStarted bool) {
 	fmt.Fprintf(output, "\nArbiter is ready to connect to %s via %s.\n", harness.Name, harness.Channel)
 	fmt.Fprintf(output, "Local config: %s\nRuntime URL: %s\n", configPath, baseURL)
-	fmt.Fprintln(output, "\n1. Start Arbiter in another terminal:")
-	fmt.Fprintln(output, "   arbiter local start")
+	if runtimeStarted {
+		fmt.Fprintln(output, "\n1. Arbiter is running and passed its readiness check.")
+	} else {
+		fmt.Fprintln(output, "\n1. Start Arbiter:")
+		fmt.Fprintln(output, "   arbiter local start --background")
+	}
 
 	switch harness.ID {
 	case "pi":
@@ -93,9 +153,9 @@ func PrintPlan(output io.Writer, harness Harness, configPath, baseURL string) {
 		fmt.Fprintln(output, "   openclaw plugins install ./integrations/openclaw-plugin")
 		fmt.Fprintln(output, "3. Enable arbiter-openclaw in the OpenClaw plugin config and restart OpenClaw.")
 	case "opencode":
-		fmt.Fprintln(output, "2. After the npm release, install the native plugin:")
-		fmt.Fprintln(output, "   opencode plugin @randromeda/arbiter-opencode")
-		fmt.Fprintln(output, "   For checkout-based setup now, see integrations/opencode-plugin/README.md.")
+		fmt.Fprintln(output, "2. For checkout-based setup now, follow integrations/opencode-plugin/README.md.")
+		fmt.Fprintln(output, "   After the registry release, add the package to opencode.json:")
+		fmt.Fprintln(output, `   "plugin": ["@randromeda/arbiter-opencode"]`)
 		fmt.Fprintln(output, "3. Start OpenCode. Set ARBITER_OPENCODE_PROTECT_TOOLS='*' to guard every tool.")
 	case "claude-code":
 		fmt.Fprintln(output, "2. Add the Arbiter marketplace and install the native plugin:")

@@ -34,6 +34,9 @@ type ConfigLoadResult struct {
 }
 
 func DefaultConfigPath() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("ARBITER_LOCAL_CONFIG")); configured != "" {
+		return filepath.Abs(configured)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)

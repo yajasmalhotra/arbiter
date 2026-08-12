@@ -198,9 +198,12 @@ arbiter onboard --harness opencode
 arbiter onboard --list
 ```
 
-The wizard initializes local runtime configuration and gives the next steps
-for Pi, OpenClaw, OpenCode, Claude Code, Gemini CLI, Goose, another MCP client,
-or a custom executor. It labels native and MCP-only coverage explicitly.
+The wizard detects installed harnesses, initializes local runtime configuration,
+starts Arbiter in the background, waits for readiness, and gives the native next
+steps for Pi, OpenClaw, OpenCode, Claude Code, Gemini CLI, Goose, another MCP
+client, or a custom executor. It labels native and MCP-only coverage explicitly.
+Use `--no-start` when a foreground runtime or externally managed service is
+preferred.
 
 Install options:
 
@@ -223,6 +226,8 @@ This creates `~/.arbiter/config.json` with local defaults, local data storage, a
 
 ```bash
 go run ./cmd/arbiter local start
+# or, with an installed binary:
+arbiter local start --background
 ```
 
 Local runtime listens on `http://127.0.0.1:8080` by default.
@@ -231,7 +236,14 @@ Local runtime listens on `http://127.0.0.1:8080` by default.
 
 ```bash
 go run ./cmd/arbiter local status
+arbiter doctor --harness pi
 ```
+
+Background runtimes write private lifecycle state and logs under
+`~/.arbiter/data`. Stop one cleanly with `arbiter local stop`; shutdown uses a
+random local bearer token rather than signalling an unverified PID.
+Set `ARBITER_LOCAL_CONFIG=/path/to/config.json` to isolate a local runtime or
+manage multiple development instances.
 
 ### 4. Send an allowed tool call
 

@@ -45,7 +45,7 @@ function baseURL(address) {
 }
 
 export function resolveOpenCodeConfig(env = process.env) {
-  const local = localConfig(env.ARBITER_OPENCODE_LOCAL_CONFIG);
+  const local = localConfig(text(env.ARBITER_OPENCODE_LOCAL_CONFIG) || text(env.ARBITER_LOCAL_CONFIG));
   const url = text(env.ARBITER_OPENCODE_URL) || text(env.ARBITER_URL) || text(local.base_url) || baseURL(local.address);
   const tenantId = text(env.ARBITER_OPENCODE_TENANT_ID) || text(env.ARBITER_TENANT_ID) || text(local.tenant_id);
   const actorId = text(env.ARBITER_OPENCODE_ACTOR_ID) || text(env.ARBITER_ACTOR_ID) || "opencode-agent";

@@ -44,6 +44,7 @@ and `PostToolUseFailure` hooks are listed with a Plugin source.
 | `ARBITER_CLAUDE_BEARER_TOKEN` | unset | Authenticated workload bearer token |
 | `ARBITER_GATEWAY_SHARED_KEY` | unset | Development/legacy interceptor boundary key |
 | `ARBITER_SERVICE_SHARED_KEY` | unset | Verify and state endpoint boundary key |
+| `ARBITER_LOCAL_CONFIG` | unset | Shared local runtime config override |
 
 Shared `ARBITER_URL`, `ARBITER_TENANT_ID`, `ARBITER_ACTOR_ID`, and
 `ARBITER_WORKLOAD_TOKEN` aliases are supported. Claude-specific values take

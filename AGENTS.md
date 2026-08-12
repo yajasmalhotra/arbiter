@@ -14,7 +14,7 @@ The control plane supports policy, bundle, and signing-key governance, but it mu
 - The Go interceptor hot path is implemented: OpenAI, Anthropic, generic framework, and streamed OpenAI tool-call inputs are normalized, evaluated, and signed.
 - Token verification is enforced at execution time with replay protection.
 - Redis-backed prior-action context is in place for sequence-aware policies.
-- A local no-Docker runtime path is available via `go run ./cmd/arbiter local init|start|status` with embedded policy evaluation and file-backed local state.
+- A local no-Docker runtime path is available via `arbiter local init|start|stop|status` with embedded policy evaluation, authenticated background lifecycle, and file-backed local state.
 - The Next.js control plane is functional with JSON fallback storage for local dev and Postgres-backed persistence for production-like runs.
 - Bundle distribution, service tokens, and signing-key rotation are implemented in the control plane, and bundle artifacts require the policy tree to be mounted when running in Docker.
 - Production rollout approvals are implemented: prod promotions/rollbacks now create approval requests, and only approvers can approve or reject execution.
@@ -69,7 +69,10 @@ This is the local-runtime CLI entrypoint.
 
 - `arbiter local init` creates local config and data directories under `~/.arbiter`.
 - `arbiter local start` runs Arbiter with embedded policy evaluation and file-backed local state/replay storage.
+- `arbiter local start --background` starts the same runtime, waits for readiness, and records private lifecycle state and logs under the local data directory.
+- `arbiter local stop` requests graceful shutdown through a loopback-only route authenticated by a random secret in the private runtime state file; it never signals an unverified PID.
 - `arbiter local status` checks local runtime health using configured base URL.
+- `arbiter doctor --harness <name>` checks runtime readiness, config discovery, harness CLI discovery, and prints the native adapter verification step.
 
 ### `internal/interceptor/`
 
@@ -350,6 +353,7 @@ Use this script for live pilot validation, not as a unit test replacement.
 This directory contains CI-critical scripts used by GitHub Actions.
 
 - `secret_history_scan.sh` enforces repository hygiene by scanning tracked files, current tree content, and reachable history for secret-like patterns and generated control-plane artifacts.
+- `local_onboarding_smoke.sh` builds the CLI and verifies background onboarding, readiness, idempotent reuse, doctor output, authenticated shutdown, and lifecycle cleanup.
 - `opa_bundle_smoke.sh` boots the Docker stack, waits for control-plane artifact endpoint readiness, verifies OPA bundle activation, and fails on digest mismatch or activation timeout.
 
 These scripts should stay deterministic and non-interactive so CI failures are actionable.
@@ -364,15 +368,18 @@ This directory contains release automation helpers for runtime distribution.
 
 ### `.github/workflows/ci.yml`
 
-The repository CI workflow runs in this order:
+The repository CI workflow runs these gates:
 
 1. `repo-hygiene` (`./tools/ci/secret_history_scan.sh`)
-2. `go-and-policy` (`go test ./...` and `opa test ...`)
+2. `go-and-policy` (`go test ./...`, local onboarding smoke, native-adapter smoke, and `opa test ...`)
 3. `control-plane` (`npm ci` and `npm run test` in `apps/control-plane`)
 4. `openclaw-plugin` (`npm ci`, `npm test`, and package smoke check)
-5. `bundle-smoke` (`./tools/ci/opa_bundle_smoke.sh`)
+5. `pi-extension` (`npm ci`, `npm test`, and package smoke check)
+6. `opencode-plugin` (`npm ci`, `npm test`, and package smoke check)
+7. `claude-code-plugin` (`npm ci`, `npm test`, and source validation)
+8. `bundle-smoke` (`./tools/ci/opa_bundle_smoke.sh`, after the control plane passes)
 
-Use this job order when reproducing CI issues locally.
+The Go, control-plane, and native package gates run in parallel after hygiene.
 
 ### `.github/workflows/arbiter-release.yml`
 

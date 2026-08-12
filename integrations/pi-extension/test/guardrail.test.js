@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import arbiterPiExtension from "../index.js";
@@ -55,6 +58,16 @@ test("accepts shared harness environment names with Pi-specific precedence", () 
   const specific = resolvePiConfig(env({ ARBITER_URL: "http://ignored.test", ARBITER_TENANT_ID: "ignored" }));
   assert.equal(specific.url, "http://arbiter.test");
   assert.equal(specific.tenantId, "tenant-pi");
+});
+
+test("discovers an isolated runtime through the shared config path", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "arbiter-pi-config-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const configPath = path.join(directory, "config.json");
+  fs.writeFileSync(configPath, JSON.stringify({ base_url: "http://isolated.test", tenant_id: "tenant-isolated" }));
+  const config = resolvePiConfig({ ARBITER_LOCAL_CONFIG: configPath });
+  assert.equal(config.url, "http://isolated.test");
+  assert.equal(config.tenantId, "tenant-isolated");
 });
 
 test("blocks a policy denial before Pi executes the tool", async () => {

@@ -47,7 +47,7 @@ function baseURL(address) {
 }
 
 export function resolvePiConfig(env = process.env) {
-  const local = localRuntimeConfig(env.ARBITER_PI_LOCAL_CONFIG);
+  const local = localRuntimeConfig(stringValue(env.ARBITER_PI_LOCAL_CONFIG) || stringValue(env.ARBITER_LOCAL_CONFIG));
   const url = stringValue(env.ARBITER_PI_URL) || stringValue(env.ARBITER_URL) || stringValue(local.base_url) || baseURL(local.address);
   const tenantId = stringValue(env.ARBITER_PI_TENANT_ID) || stringValue(env.ARBITER_TENANT_ID) || stringValue(local.tenant_id);
   const actorId = stringValue(env.ARBITER_PI_ACTOR_ID) || stringValue(env.ARBITER_ACTOR_ID) || "pi-agent";

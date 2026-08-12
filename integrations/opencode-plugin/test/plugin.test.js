@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import ArbiterPlugin from "../index.js";
@@ -40,6 +43,16 @@ test("uses local-safe defaults and shared configuration aliases", () => {
   assert.equal(shared.tenantId, "shared-tenant");
   assert.equal(shared.actorId, "shared-actor");
   assert.equal(shared.bearerToken, "Bearer workload");
+});
+
+test("discovers an isolated runtime through the shared config path", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "arbiter-opencode-config-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const configPath = path.join(directory, "config.json");
+  fs.writeFileSync(configPath, JSON.stringify({ base_url: "http://isolated.test", tenant_id: "tenant-isolated" }));
+  const config = resolveOpenCodeConfig({ ARBITER_LOCAL_CONFIG: configPath });
+  assert.equal(config.url, "http://isolated.test");
+  assert.equal(config.tenantId, "tenant-isolated");
 });
 
 test("blocks a denial before OpenCode executes the tool", async () => {

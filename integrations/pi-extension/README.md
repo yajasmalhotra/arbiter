@@ -49,6 +49,7 @@ Run `/arbiter` inside Pi to see the active endpoint, tenant, actor, and protecte
 | `ARBITER_GATEWAY_SHARED_KEY` | unset | Development/legacy interceptor boundary key |
 | `ARBITER_SERVICE_SHARED_KEY` | unset | Verify and state endpoint boundary key |
 | `ARBITER_PI_LOCAL_CONFIG` | `~/.arbiter/config.json` | Override local runtime config path |
+| `ARBITER_LOCAL_CONFIG` | unset | Shared local config override used when the Pi-specific value is unset |
 
 `ARBITER_URL`, `ARBITER_TENANT_ID`, `ARBITER_ACTOR_ID`, and
 `ARBITER_WORKLOAD_TOKEN` are shared aliases for teams that configure several

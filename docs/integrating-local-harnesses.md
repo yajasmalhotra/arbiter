@@ -2,7 +2,10 @@
 
 Run `arbiter` with no arguments for guided setup, or use
 `arbiter onboard --harness <name>`. Run `arbiter onboard --list` to see the
-native, MCP, and custom paths.
+native, MCP, and custom paths. Guided setup detects harness CLIs, starts the
+local runtime in the background, waits for `/readyz`, and prints the correct
+harness-native installation path. Use `--no-start` to leave runtime lifecycle
+to another process manager.
 
 Use the narrowest integration that can keep Arbiter on the execution path. A
 harness integration should translate lifecycle events; it should not reimplement
@@ -66,6 +69,13 @@ precedence over shared values. Local adapters should also discover
 go run ./cmd/arbiter local init
 go run ./cmd/arbiter local start
 ```
+
+With an installed binary, `arbiter local start --background`, `arbiter local
+status`, and `arbiter local stop` provide a complete local lifecycle. Run
+`arbiter doctor --harness <name>` to verify runtime readiness, configuration,
+harness discovery, and print the harness-native adapter verification step. Use
+`ARBITER_LOCAL_CONFIG` when a development environment needs an isolated config
+and data directory.
 
 Secrets must not be printed by status commands or error messages. Production
 deployments should use authenticated workload identity and preserve the

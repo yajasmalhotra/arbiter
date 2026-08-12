@@ -6,14 +6,16 @@ uses its `tool.execute.before` and `tool.execute.after` hooks.
 
 ## Install
 
-Package target after its npm release:
+Package target after its npm release: add the package to the `plugin` array in
+the project or global `opencode.json`. OpenCode installs configured npm plugins
+with Bun when it starts.
 
-```bash
-opencode plugin @randromeda/arbiter-opencode
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@randromeda/arbiter-opencode"]
+}
 ```
-
-OpenCode adds the package to `opencode.json` and installs it with Bun on the
-next startup.
 
 During repository development, import `integrations/opencode-plugin/index.js`
 from a project plugin under `.opencode/plugins/`.
@@ -34,8 +36,9 @@ tool exposed through OpenCode.
 
 Harness-specific variables use the `ARBITER_OPENCODE_` prefix. Shared
 `ARBITER_URL`, `ARBITER_TENANT_ID`, `ARBITER_ACTOR_ID`, and
-`ARBITER_WORKLOAD_TOKEN` aliases are also supported, with harness-specific
-values taking precedence.
+`ARBITER_WORKLOAD_TOKEN` aliases are also supported. `ARBITER_LOCAL_CONFIG`
+provides a shared config-file override. Harness-specific values take
+precedence.
 
 The plugin calls Arbiter intercept and permit verification before returning
 from the pre-execution hook. It records state only after OpenCode reports that

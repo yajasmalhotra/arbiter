@@ -32,3 +32,15 @@ func TestEnsureConfigCreatesAndLoads(t *testing.T) {
 		t.Fatalf("expected token secret to remain stable")
 	}
 }
+
+func TestDefaultConfigPathHonorsExplicitOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "custom.json")
+	t.Setenv("ARBITER_LOCAL_CONFIG", override)
+	path, err := DefaultConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != override {
+		t.Fatalf("config path = %q, want %q", path, override)
+	}
+}

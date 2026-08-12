@@ -42,6 +42,9 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+      - name: Run local onboarding smoke test
+        run: ./tools/ci/local_onboarding_smoke.sh
+
       - name: Set up OPA
         env:
           OPA_VERSION: 1.18.2

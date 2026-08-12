@@ -63,6 +63,15 @@ test("uses side-effecting defaults and shared configuration aliases", (t) => {
   assert.equal(shared.bearerToken, "Bearer workload");
 });
 
+test("discovers an isolated runtime through the shared config path", (t) => {
+  const directory = tempDirectory(t);
+  const configPath = path.join(directory, "config.json");
+  fs.writeFileSync(configPath, JSON.stringify({ base_url: "http://isolated.test", tenant_id: "tenant-isolated" }));
+  const config = resolveClaudeConfig({ ARBITER_LOCAL_CONFIG: configPath, ARBITER_CLAUDE_MARKER_DIR: directory });
+  assert.equal(config.url, "http://isolated.test");
+  assert.equal(config.tenantId, "tenant-isolated");
+});
+
 test("returns a structured denial before Claude executes a blocked tool", async (t) => {
   const guardrail = createArbiterClaudeGuardrail({
     env: env(t),

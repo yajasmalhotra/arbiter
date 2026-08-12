@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Correct installation guidance to use OpenCode's native `opencode.json` plugin configuration.
+- Discover isolated local runtimes through the shared `ARBITER_LOCAL_CONFIG` override.
+
 ## 0.1.0
 
 - Initial OpenCode native plugin.
