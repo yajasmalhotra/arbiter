@@ -33,7 +33,20 @@ export async function ensureMigrations(): Promise<void> {
     return;
   }
   if (!migrationsPromise) {
-    migrationsPromise = runMigrations();
+    const attempt = runMigrations();
+    migrationsPromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      // A database can be temporarily unavailable while a container, failover,
+      // or managed service is becoming ready. Do not permanently poison this
+      // process with the first rejected migration attempt.
+      if (migrationsPromise === attempt) {
+        migrationsPromise = null;
+      }
+      throw error;
+    }
+    return;
   }
   return migrationsPromise;
 }
