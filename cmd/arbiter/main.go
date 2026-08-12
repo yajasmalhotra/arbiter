@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,13 +14,17 @@ import (
 	"arbiter/internal/executorauth"
 	"arbiter/internal/interceptor"
 	"arbiter/internal/local"
+	"arbiter/internal/onboarding"
 	"arbiter/internal/telemetry"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		if err := runOnboard(nil, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "arbiter onboarding error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	switch os.Args[1] {
@@ -27,10 +33,54 @@ func main() {
 			fmt.Fprintf(os.Stderr, "arbiter local error: %v\n", err)
 			os.Exit(1)
 		}
+	case "onboard":
+		if err := runOnboard(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "arbiter onboarding error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func runOnboard(args []string, input io.Reader, output io.Writer) error {
+	flags := flag.NewFlagSet("arbiter onboard", flag.ContinueOnError)
+	flags.SetOutput(output)
+	harnessName := flags.String("harness", "", "harness to configure (run --list for choices)")
+	list := flags.Bool("list", false, "list supported harness paths")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	if *list {
+		onboarding.PrintHarnesses(output)
+		return nil
+	}
+
+	var (
+		harness onboarding.Harness
+		err     error
+	)
+	if *harnessName == "" {
+		harness, err = onboarding.Prompt(input, output)
+	} else {
+		harness, err = onboarding.Resolve(*harnessName)
+	}
+	if err != nil {
+		return err
+	}
+	result, err := local.EnsureConfig("")
+	if err != nil {
+		return err
+	}
+	onboarding.PrintPlan(output, harness, result.Path, result.Config.BaseURL)
+	return nil
 }
 
 func runLocal(args []string) error {
@@ -153,6 +203,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: arbiter <command>")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  onboard [--harness <name>]")
 	fmt.Fprintln(os.Stderr, "  local init")
 	fmt.Fprintln(os.Stderr, "  local start")
 	fmt.Fprintln(os.Stderr, "  local status")

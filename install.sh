@@ -141,24 +141,30 @@ if [[ -z "${INSTALL_DIR}" ]]; then
 fi
 
 mkdir -p "${INSTALL_DIR}"
-target="${INSTALL_DIR}/arbiter"
-
-if [[ -w "${INSTALL_DIR}" ]]; then
-  install -m 755 "${tmpdir}/arbiter" "${target}"
-else
-  if command -v sudo >/dev/null 2>&1; then
-    sudo install -m 755 "${tmpdir}/arbiter" "${target}"
+install_binary() {
+  local binary="$1"
+  local target="${INSTALL_DIR}/${binary}"
+  if [[ -w "${INSTALL_DIR}" ]]; then
+    install -m 755 "${tmpdir}/${binary}" "${target}"
   else
-    echo "install directory is not writable and sudo is unavailable: ${INSTALL_DIR}" >&2
-    exit 1
+    if command -v sudo >/dev/null 2>&1; then
+      sudo install -m 755 "${tmpdir}/${binary}" "${target}"
+    else
+      echo "install directory is not writable and sudo is unavailable: ${INSTALL_DIR}" >&2
+      exit 1
+    fi
   fi
-fi
+  echo "Installed ${binary} ${VERSION} to ${target}"
+}
 
-echo "Installed arbiter ${VERSION} to ${target}"
+install_binary arbiter
+if [[ -f "${tmpdir}/arbiter-mcp" ]]; then
+  install_binary arbiter-mcp
+else
+  echo "This older release does not include arbiter-mcp; MCP gateway onboarding requires a newer release."
+fi
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
   echo "Add ${INSTALL_DIR} to PATH if needed."
 fi
 echo "Next:"
-echo "  arbiter local init"
-echo "  arbiter local start"
-
+echo "  arbiter"

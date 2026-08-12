@@ -75,6 +75,7 @@ class Arbiter < Formula
 
   def install
     bin.install "arbiter"
+    bin.install "arbiter-mcp"
   end
 
   test do

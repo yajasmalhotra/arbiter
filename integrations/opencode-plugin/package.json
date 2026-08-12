@@ -1,0 +1,29 @@
+{
+  "name": "@randromeda/arbiter-opencode",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that enforces Arbiter guardrails before tool execution.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "opencode-plugin",
+    "agent-guardrails",
+    "arbiter"
+  ],
+  "files": [
+    "index.js",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "SEMVER.md"
+  ],
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "node --test ./test/*.test.js",
+    "pack:check": "npm pack --dry-run"
+  }
+}

@@ -16,7 +16,7 @@ On each run:
    - `darwin/arm64`
    - `linux/amd64`
    - `linux/arm64`
-3. Publishes GitHub Release assets:
+3. Publishes GitHub Release assets containing both `arbiter` and `arbiter-mcp`:
    - `arbiter_<version>_<os>_<arch>.tar.gz`
    - `checksums.txt`
    - `install.sh`

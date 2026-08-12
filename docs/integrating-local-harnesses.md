@@ -1,5 +1,9 @@
 # Integrating Local Agent Harnesses
 
+Run `arbiter` with no arguments for guided setup, or use
+`arbiter onboard --harness <name>`. Run `arbiter onboard --list` to see the
+native, MCP, and custom paths.
+
 Use the narrowest integration that can keep Arbiter on the execution path. A
 harness integration should translate lifecycle events; it should not reimplement
 policy, permit validation, or state semantics.
@@ -19,8 +23,8 @@ feedback experience for built-in harness tools, but the underlying tool
 credentials should still be scoped as narrowly as possible.
 
 The Pi extension in `integrations/pi-extension` is the reference native
-adapter. The OpenClaw plugin demonstrates the same contract with a different
-hook API.
+adapter. The OpenClaw and OpenCode plugins demonstrate the same contract with
+different hook APIs.
 
 ## Native adapter contract
 

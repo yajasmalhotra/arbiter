@@ -22,20 +22,21 @@ platforms=(
 
 for platform in "${platforms[@]}"; do
   read -r goos goarch <<<"${platform}"
-  bin_path="${DIST_DIR}/arbiter"
   archive="arbiter_${VERSION}_${goos}_${goarch}.tar.gz"
 
   echo "Building ${goos}/${goarch}..."
   (
     cd "${ROOT_DIR}"
     CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
-      go build -trimpath -ldflags="-s -w" -o "${bin_path}" ./cmd/arbiter
+      go build -trimpath -ldflags="-s -w" -o "${DIST_DIR}/arbiter" ./cmd/arbiter
+    CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+      go build -trimpath -ldflags="-s -w" -o "${DIST_DIR}/arbiter-mcp" ./cmd/arbiter-mcp
   )
 
   (
     cd "${DIST_DIR}"
-    tar -czf "${archive}" arbiter
-    rm -f arbiter
+    tar -czf "${archive}" arbiter arbiter-mcp
+    rm -f arbiter arbiter-mcp
   )
 done
 
@@ -45,4 +46,3 @@ done
 )
 
 echo "Artifacts written to ${DIST_DIR}"
-

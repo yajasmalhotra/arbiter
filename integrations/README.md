@@ -26,6 +26,11 @@ configuration, and conformance checklist, see
   - Runtime entry: `integrations/pi-extension/index.js`
   - Setup and configuration: `integrations/pi-extension/README.md`
   - Reference implementation for new hook-based local harness adapters
+- `opencode-plugin/`: Native OpenCode plugin for pre-execution tool enforcement.
+  - Package target: `@randromeda/arbiter-opencode`
+  - Hooks: `tool.execute.before` for fail-closed intercept/verify and `tool.execute.after` for state recording
+  - Protects built-in, custom, and MCP tools exposed through OpenCode
+  - Setup and configuration: `integrations/opencode-plugin/README.md`
 
 Run integration tests:
 
@@ -33,4 +38,5 @@ Run integration tests:
 python3 -m unittest discover integrations/python/tests -v
 cd integrations/openclaw-plugin && npm test
 cd integrations/pi-extension && npm test
+cd integrations/opencode-plugin && npm test
 ```
