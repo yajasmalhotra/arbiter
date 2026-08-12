@@ -2,6 +2,10 @@
 
 First-class adoption packages live here.
 
+For the common adapter contract, integration-path decision table, shared
+configuration, and conformance checklist, see
+[`docs/integrating-local-harnesses.md`](../docs/integrating-local-harnesses.md).
+
 - `python/`: Python wrappers for gateway-driven and agent-native interception/verification.
   - LiteLLM path: `arbiter_integrations.litellm`
   - OpenClaw/generic path: `arbiter_integrations.openclaw`
@@ -21,6 +25,7 @@ First-class adoption packages live here.
   - Local runtime discovery: defaults to `~/.arbiter/config.json`
   - Runtime entry: `integrations/pi-extension/index.js`
   - Setup and configuration: `integrations/pi-extension/README.md`
+  - Reference implementation for new hook-based local harness adapters
 
 Run integration tests:
 

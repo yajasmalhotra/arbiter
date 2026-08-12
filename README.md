@@ -405,6 +405,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Quick evaluation with a real model: [examples/litellm-harness/README.md](examples/litellm-harness/README.md)
 - OpenClaw native plugin setup: [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md)
 - Pi native extension setup: [integrations/pi-extension/README.md](integrations/pi-extension/README.md)
+- Local harness integration guide: [integrating-local-harnesses.md](docs/integrating-local-harnesses.md)
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
 - Integration package overview: [integrations/README.md](integrations/README.md)
 - Control plane workflows and APIs: [apps/control-plane/README.md](apps/control-plane/README.md)

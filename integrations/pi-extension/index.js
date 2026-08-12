@@ -18,7 +18,7 @@ export default function arbiterPiExtension(pi) {
   pi.registerCommand("arbiter", {
     description: "Show Arbiter guardrail status for this Pi session",
     handler: async (_args, ctx) => {
-      const status = guardrail.status();
+      const status = await guardrail.diagnose(ctx.signal);
       ctx.ui.notify(status.message, status.ready ? "info" : "error");
     }
   });

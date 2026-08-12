@@ -48,9 +48,9 @@ function baseURL(address) {
 
 export function resolvePiConfig(env = process.env) {
   const local = localRuntimeConfig(env.ARBITER_PI_LOCAL_CONFIG);
-  const url = stringValue(env.ARBITER_PI_URL) || stringValue(local.base_url) || baseURL(local.address);
-  const tenantId = stringValue(env.ARBITER_PI_TENANT_ID) || stringValue(local.tenant_id);
-  const actorId = stringValue(env.ARBITER_PI_ACTOR_ID) || "pi-agent";
+  const url = stringValue(env.ARBITER_PI_URL) || stringValue(env.ARBITER_URL) || stringValue(local.base_url) || baseURL(local.address);
+  const tenantId = stringValue(env.ARBITER_PI_TENANT_ID) || stringValue(env.ARBITER_TENANT_ID) || stringValue(local.tenant_id);
+  const actorId = stringValue(env.ARBITER_PI_ACTOR_ID) || stringValue(env.ARBITER_ACTOR_ID) || "pi-agent";
   const tools = protectedTools(env.ARBITER_PI_PROTECT_TOOLS);
   const missing = [];
   if (!url) missing.push("ARBITER_PI_URL");
@@ -65,7 +65,7 @@ export function resolvePiConfig(env = process.env) {
     failClosed: booleanValue(env.ARBITER_PI_FAIL_CLOSED, true),
     recordState: booleanValue(env.ARBITER_PI_RECORD_STATE, true),
     timeoutMs: timeoutValue(env.ARBITER_PI_TIMEOUT_MS),
-    bearerToken: stringValue(env.ARBITER_PI_BEARER_TOKEN),
+    bearerToken: stringValue(env.ARBITER_PI_BEARER_TOKEN) || stringValue(env.ARBITER_WORKLOAD_TOKEN),
     gatewayKey: stringValue(env.ARBITER_GATEWAY_SHARED_KEY),
     serviceKey: stringValue(env.ARBITER_SERVICE_SHARED_KEY),
     missing

@@ -1,4 +1,4 @@
-export async function postJSON({ fetchImpl, baseUrl, path, payload, headers = {}, timeoutMs, signal }) {
+async function requestJSON({ fetchImpl, baseUrl, path, method, payload, headers = {}, timeoutMs, signal }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`request timed out after ${timeoutMs}ms`)), timeoutMs);
   const abort = () => controller.abort(signal?.reason);
@@ -6,12 +6,12 @@ export async function postJSON({ fetchImpl, baseUrl, path, payload, headers = {}
 
   try {
     const response = await fetchImpl(`${baseUrl}${path}`, {
-      method: "POST",
+      method,
       headers: {
         "Content-Type": "application/json",
         ...headers
       },
-      body: JSON.stringify(payload),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
       signal: controller.signal
     });
     const text = await response.text();
@@ -28,4 +28,12 @@ export async function postJSON({ fetchImpl, baseUrl, path, payload, headers = {}
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
   }
+}
+
+export function postJSON(options) {
+  return requestJSON({ ...options, method: "POST" });
+}
+
+export function getJSON(options) {
+  return requestJSON({ ...options, method: "GET" });
 }

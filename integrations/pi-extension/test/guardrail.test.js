@@ -39,6 +39,24 @@ test("config protects side-effecting Pi tools and fails closed by default", () =
   assert.deepEqual(config.missing, []);
 });
 
+test("accepts shared harness environment names with Pi-specific precedence", () => {
+  const shared = resolvePiConfig({
+    ARBITER_PI_LOCAL_CONFIG: missingLocalConfig,
+    ARBITER_URL: "http://shared.test",
+    ARBITER_TENANT_ID: "tenant-shared",
+    ARBITER_ACTOR_ID: "shared-agent",
+    ARBITER_WORKLOAD_TOKEN: "Bearer shared-token"
+  });
+  assert.equal(shared.url, "http://shared.test");
+  assert.equal(shared.tenantId, "tenant-shared");
+  assert.equal(shared.actorId, "shared-agent");
+  assert.equal(shared.bearerToken, "Bearer shared-token");
+
+  const specific = resolvePiConfig(env({ ARBITER_URL: "http://ignored.test", ARBITER_TENANT_ID: "ignored" }));
+  assert.equal(specific.url, "http://arbiter.test");
+  assert.equal(specific.tenantId, "tenant-pi");
+});
+
 test("blocks a policy denial before Pi executes the tool", async () => {
   const fetchImpl = async () => response(403, { decision: { reason: "shell command denied" } });
   const guardrail = createArbiterPiGuardrail({ env: env(), fetchImpl });
@@ -169,4 +187,23 @@ test("registers Pi lifecycle hooks and the status command", () => {
   assert.equal(typeof events.get("tool_result"), "function");
   assert.equal(typeof events.get("session_start"), "function");
   assert.equal(typeof commands.get("arbiter")?.handler, "function");
+});
+
+test("diagnoses live Arbiter readiness without exposing credentials", async () => {
+  const requests = [];
+  const guardrail = createArbiterPiGuardrail({
+    env: env({ ARBITER_PI_BEARER_TOKEN: "Bearer do-not-print" }),
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return response(200, { status: "ready" });
+    }
+  });
+
+  const result = await guardrail.diagnose();
+  assert.equal(result.ready, true);
+  assert.match(result.message, /Readiness check passed/);
+  assert.doesNotMatch(result.message, /do-not-print/);
+  assert.equal(requests[0].url, "http://arbiter.test/readyz");
+  assert.equal(requests[0].options.method, "GET");
+  assert.equal(requests[0].options.body, undefined);
 });

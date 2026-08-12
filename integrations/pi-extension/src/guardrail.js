@@ -1,6 +1,6 @@
 import { buildCanonicalRequest } from "./canonical.js";
 import { resolvePiConfig, sessionId } from "./config.js";
-import { postJSON } from "./http.js";
+import { getJSON, postJSON } from "./http.js";
 
 function reason(body) {
   if (!body || typeof body !== "object") return "";
@@ -149,5 +149,37 @@ export function createArbiterPiGuardrail({ env = process.env, fetchImpl = global
     };
   }
 
-  return { beforeToolCall, afterToolResult, status };
+  async function diagnose(signal) {
+    const configured = status();
+    if (!configured.ready) return configured;
+    try {
+      const response = await getJSON({
+        fetchImpl,
+        baseUrl: config.url,
+        path: "/readyz",
+        timeoutMs: config.timeoutMs,
+        signal
+      });
+      if (response.status !== 200) {
+        return {
+          ready: false,
+          protectedTools: configured.protectedTools,
+          message: `Arbiter is configured but not ready at ${config.url} (HTTP ${response.status}${reason(response.body) ? `: ${reason(response.body)}` : ""}).`
+        };
+      }
+      return {
+        ready: true,
+        protectedTools: configured.protectedTools,
+        message: `${configured.message} Readiness check passed.`
+      };
+    } catch (error) {
+      return {
+        ready: false,
+        protectedTools: configured.protectedTools,
+        message: `Arbiter is configured but unreachable at ${config.url}: ${String(error)}`
+      };
+    }
+  }
+
+  return { beforeToolCall, afterToolResult, status, diagnose };
 }

@@ -32,7 +32,7 @@ go run ./cmd/arbiter local start
 pi -e ./integrations/pi-extension
 ```
 
-Run `/arbiter` inside Pi to see the active endpoint, tenant, actor, and protected tools.
+Run `/arbiter` inside Pi to see the active endpoint, tenant, actor, and protected tools and perform a live Arbiter readiness check.
 
 ## Configuration
 
@@ -49,6 +49,11 @@ Run `/arbiter` inside Pi to see the active endpoint, tenant, actor, and protecte
 | `ARBITER_GATEWAY_SHARED_KEY` | unset | Development/legacy interceptor boundary key |
 | `ARBITER_SERVICE_SHARED_KEY` | unset | Verify and state endpoint boundary key |
 | `ARBITER_PI_LOCAL_CONFIG` | `~/.arbiter/config.json` | Override local runtime config path |
+
+`ARBITER_URL`, `ARBITER_TENANT_ID`, `ARBITER_ACTOR_ID`, and
+`ARBITER_WORKLOAD_TOKEN` are shared aliases for teams that configure several
+harness adapters from the same environment. Pi-specific variables take
+precedence.
 
 For enterprise use, protect every installed tool and use authenticated workload identity:
 
