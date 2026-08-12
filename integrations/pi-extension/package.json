@@ -1,0 +1,37 @@
+{
+  "name": "@randromeda/arbiter-pi",
+  "version": "0.1.0",
+  "description": "Pi extension that enforces Arbiter guardrails before tool execution.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "agent-guardrails",
+    "arbiter"
+  ],
+  "files": [
+    "index.js",
+    "src",
+    "scripts",
+    "README.md",
+    "CHANGELOG.md",
+    "SEMVER.md"
+  ],
+  "exports": {
+    ".": "./index.js"
+  },
+  "pi": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "scripts": {
+    "test": "node --test ./test/*.test.js",
+    "pack:check": "npm pack --dry-run",
+    "release:tag": "bash ./scripts/release-tag.sh"
+  }
+}

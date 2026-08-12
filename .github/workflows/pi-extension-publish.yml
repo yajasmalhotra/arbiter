@@ -1,0 +1,52 @@
+name: pi-extension-publish
+
+on:
+  push:
+    tags:
+      - "pi-extension-v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/pi-extension
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.19
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: integrations/pi-extension/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run extension tests
+        run: npm test
+
+      - name: Run package smoke check
+        run: npm run pack:check
+
+      - name: Ensure tag version matches package version
+        if: startsWith(github.ref, 'refs/tags/pi-extension-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#pi-extension-v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PACKAGE_VERSION)."
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

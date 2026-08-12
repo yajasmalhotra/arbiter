@@ -15,10 +15,17 @@ First-class adoption packages live here.
   - Manifest: `integrations/openclaw-plugin/openclaw.plugin.json`
   - Runtime entry: `integrations/openclaw-plugin/index.js`
   - Release docs: `integrations/openclaw-plugin/CHANGELOG.md`, `integrations/openclaw-plugin/SEMVER.md`
+- `pi-extension/`: Native Pi extension package for pre-execution tool enforcement.
+  - Package target: `@randromeda/arbiter-pi`
+  - Hooks: `tool_call` for fail-closed intercept/verify and `tool_result` for state recording
+  - Local runtime discovery: defaults to `~/.arbiter/config.json`
+  - Runtime entry: `integrations/pi-extension/index.js`
+  - Setup and configuration: `integrations/pi-extension/README.md`
 
 Run integration tests:
 
 ```bash
 python3 -m unittest discover integrations/python/tests -v
 cd integrations/openclaw-plugin && npm test
+cd integrations/pi-extension && npm test
 ```

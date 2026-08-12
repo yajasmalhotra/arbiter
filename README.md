@@ -342,6 +342,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 | Signed OPA bundle distribution | Supported | service-token auth plus bundle signatures |
 | Python integration wrappers | Supported | LiteLLM and OpenClaw/generic wrappers |
 | OpenClaw native plugin | Supported (alpha) | `integrations/openclaw-plugin` (`before_tool_call` + verify + state record) |
+| Pi native extension | Supported (alpha) | `integrations/pi-extension` (`tool_call` + verify + `tool_result`) |
 | Local runtime (no Docker) | Supported (alpha) | `go run ./cmd/arbiter local init/start/status` |
 | Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
@@ -394,6 +395,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 
 - The project is still alpha.
 - OpenClaw native plugin support is alpha and currently optimized for stock filesystem/process tools.
+- Pi extension support is alpha and guards built-in or custom tools through Pi's native lifecycle hooks.
 - Control-plane multi-tenant governance still needs more hardening before calling it broadly enterprise-ready.
 - Arbiter should be paired with real executor isolation and least-privilege credentials. It is one layer in a defense-in-depth design, not the whole system.
 
@@ -402,6 +404,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - Safe OpenClaw guardrail smoke test: prompt OpenClaw to create `/tmp/arbiter-deny-test/...` with `exec` or `process`; the default filesystem policy blocks that canary prefix without requiring a destructive command.
 - Quick evaluation with a real model: [examples/litellm-harness/README.md](examples/litellm-harness/README.md)
 - OpenClaw native plugin setup: [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md)
+- Pi native extension setup: [integrations/pi-extension/README.md](integrations/pi-extension/README.md)
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
 - Integration package overview: [integrations/README.md](integrations/README.md)
 - Control plane workflows and APIs: [apps/control-plane/README.md](apps/control-plane/README.md)
