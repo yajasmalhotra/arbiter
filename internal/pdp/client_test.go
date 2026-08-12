@@ -88,6 +88,41 @@ func TestClientDecideDeny(t *testing.T) {
 	}
 }
 
+func TestClientDecideShadowWouldDeny(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{
+				"allow":            true,
+				"policy_allow":     false,
+				"enforcement_mode": "shadow",
+				"reason":           "tool policy denied",
+				"policy_package":   "arbiter.authz",
+				"policy_version":   "v2-shadow",
+				"data_revision":    "rev-2",
+				"decision_id":      "decision-shadow",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", 0)
+	decision, err := client.Decide(context.Background(), schema.CanonicalRequest{
+		SchemaVersion: schema.CurrentSchemaVersion,
+		Metadata:      schema.Metadata{RequestID: "req-shadow", TenantID: "tenant-1"},
+		AgentContext:  schema.AgentContext{Actor: schema.Actor{ID: "actor-1"}},
+		ToolName:      "bash",
+		Parameters:    []byte(`{"command":"rm -rf /tmp/example"}`),
+	})
+	if err != nil {
+		t.Fatalf("shadow decide: %v", err)
+	}
+	if !decision.Allow || decision.EvaluatedAllow() || decision.EnforcementMode != "shadow" {
+		t.Fatalf("unexpected shadow decision: %#v", decision)
+	}
+}
+
 func TestClientReady(t *testing.T) {
 	t.Parallel()
 

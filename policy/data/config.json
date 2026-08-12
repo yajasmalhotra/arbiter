@@ -2,7 +2,9 @@
   "arbiter": {
     "config": {
       "policy_version": "v1",
-      "data_revision": "local-dev"
+      "data_revision": "local-dev",
+      "enforcement_mode": "enforce",
+      "rollout_state": "enforced"
     },
     "context_requirements": {
       "delete_backup": [

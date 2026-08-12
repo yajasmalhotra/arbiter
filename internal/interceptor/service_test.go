@@ -460,6 +460,37 @@ func TestServiceInterceptOpenAI(t *testing.T) {
 	}
 }
 
+func TestServiceInterceptReturnsShadowVerdictAndPermit(t *testing.T) {
+	t.Parallel()
+	policyAllow := false
+	service := newTestService(pdp.StaticDecider{Decision: schema.Decision{
+		Allow:           true,
+		PolicyAllow:     &policyAllow,
+		EnforcementMode: "shadow",
+		Reason:          "tool policy denied",
+		PolicyPackage:   "arbiter.authz",
+		PolicyVersion:   "shadow-v1",
+		DataRevision:    "shadow-data-v1",
+		DecisionID:      "decision-shadow-1",
+	}}, state.NewMemoryStore())
+
+	mux := http.NewServeMux()
+	service.RegisterRoutes(mux)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, newJSONRequest(http.MethodPost, "/v1/intercept/openai", defaultOpenAIEnvelope()))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected shadow request to continue, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var signed schema.SignedDecision
+	if err := json.NewDecoder(recorder.Body).Decode(&signed); err != nil {
+		t.Fatalf("decode shadow response: %v", err)
+	}
+	if signed.Token == "" || !signed.Decision.Allow || signed.Decision.EvaluatedAllow() || signed.Decision.EnforcementMode != "shadow" {
+		t.Fatalf("expected signed effective allow with raw deny evidence, got %#v", signed)
+	}
+}
+
 func TestServiceVerifyRejectsReplay(t *testing.T) {
 	t.Parallel()
 

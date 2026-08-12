@@ -70,4 +70,11 @@ if [[ "${status_code}" != "200" ]]; then
   exit 1
 fi
 
+echo "[smoke] validating production enforcement mode"
+runtime_config="$(curl -fsS http://localhost:8181/v1/data/arbiter/config)"
+if ! grep -q '"enforcement_mode":"enforce"' <<<"${runtime_config}"; then
+  echo "[smoke] production bundle did not activate in enforce mode: ${runtime_config}"
+  exit 1
+fi
+
 echo "[smoke] passed"

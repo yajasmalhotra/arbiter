@@ -13,7 +13,7 @@ import { controlPlaneHeaders, loadControlPlaneClientConfig } from "@/lib/control
 import { summarizeBundleChanges } from "@/lib/bundle-diff";
 import { bundleStatusLabel, formatTimestamp, rolloutLabel, shortID } from "@/lib/presentation";
 import { cn } from "@/lib/utils";
-import type { ApprovalRequest, BundleActivation, BundleArtifact, CapabilityGrant, ServiceToken, SigningKey } from "@/lib/types";
+import type { ApprovalRequest, BundleActivation, BundleArtifact, CapabilityGrant, RolloutState, ServiceToken, SigningKey } from "@/lib/types";
 
 const selectClass = cn(
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background",
@@ -65,10 +65,12 @@ export function OperationsWorkbench(props: Props) {
   const [signingKeys, setSigningKeys] = useState(props.signingKeys);
   const [capabilityGrants, setCapabilityGrants] = useState(props.capabilityGrants);
   const [approvalRequests, setApprovalRequests] = useState(props.approvalRequests);
+  const [bundles, setBundles] = useState(props.bundles);
   const [reviewNotesById, setReviewNotesById] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<StatusMessage | null>(null);
   const [currentRole, setCurrentRole] = useState<Role | undefined>();
 
+  const [publishRolloutState, setPublishRolloutState] = useState<RolloutState>("shadow");
   const [promoteBundleId, setPromoteBundleId] = useState(props.bundles[0]?.id ?? "");
   const [promoteChannel, setPromoteChannel] = useState<"dev" | "staging" | "prod">("prod");
   const [promoteNotes, setPromoteNotes] = useState("");
@@ -102,7 +104,7 @@ export function OperationsWorkbench(props: Props) {
   const canEdit = hasMinimumRole(currentRole, "editor");
   const canApprove = hasMinimumRole(currentRole, "approver");
   const pendingApprovals = approvalRequests.filter((request) => request.state === "pending");
-  const selectedBundle = props.bundles.find((bundle) => bundle.id === promoteBundleId);
+  const selectedBundle = bundles.find((bundle) => bundle.id === promoteBundleId);
   const releasePreview = summarizeBundleChanges(props.activeBundle, selectedBundle);
 
   useEffect(() => {
@@ -136,6 +138,42 @@ export function OperationsWorkbench(props: Props) {
 
   function upsertApprovalRequest(request: ApprovalRequest) {
     setApprovalRequests((current) => [request, ...current.filter((item) => item.id !== request.id)]);
+  }
+
+  async function handlePublish(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus(null);
+    if (!canEdit) {
+      setStatus({ kind: "error", text: "Publishing bundles requires editor role or higher." });
+      return;
+    }
+    setPending("publish");
+    try {
+      const res = await fetch("/api/bundles", {
+        method: "POST",
+        headers: requestHeaders(),
+        body: JSON.stringify({
+          rolloutState: publishRolloutState,
+          data: props.activeBundle?.snapshot.data ?? {}
+        })
+      });
+      const body = await parseBody(res);
+      if (!res.ok) {
+        setStatus({ kind: "error", text: String(body.error ?? `Publish failed (${res.status})`) });
+        return;
+      }
+      const bundle = (body.bundle ?? null) as BundleArtifact | null;
+      if (!bundle) {
+        setStatus({ kind: "error", text: "Publish succeeded without returning a bundle." });
+        return;
+      }
+      setBundles((current) => [bundle, ...current.filter((item) => item.id !== bundle.id)]);
+      setPromoteBundleId(bundle.id);
+      setStatus({ kind: "success", text: publishRolloutState === "shadow" ? "Shadow bundle published. Promote it to development or staging to observe would-deny decisions." : "Bundle published." });
+      router.refresh();
+    } finally {
+      setPending(null);
+    }
   }
 
   async function handlePromote(e: React.FormEvent) {
@@ -552,7 +590,7 @@ export function OperationsWorkbench(props: Props) {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Release controls</CardTitle>
-          <CardDescription>Promote bundles safely and rollback quickly if an issue appears.</CardDescription>
+          <CardDescription>Publish candidates, observe them safely, promote deliberately, and rollback quickly.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6 lg:grid-cols-2">
           <div className="grid gap-4">
@@ -568,6 +606,23 @@ export function OperationsWorkbench(props: Props) {
               )}
             </div>
 
+            <form className="grid gap-3 rounded-md border p-4" onSubmit={(e) => void handlePublish(e)}>
+              <p className="text-sm font-medium">Publish candidate</p>
+              <p className="text-xs text-muted-foreground">Snapshot current policies and preserve the active bundle&apos;s data revision inputs.</p>
+              <div className="grid gap-2">
+                <Label htmlFor="publish-rollout">Initial mode</Label>
+                <select id="publish-rollout" className={selectClass} value={publishRolloutState} onChange={(e) => setPublishRolloutState(e.target.value as RolloutState)}>
+                  <option value="shadow">Monitoring only (recommended)</option>
+                  <option value="canary">Canary label (enforced)</option>
+                  <option value="enforced">Enforced</option>
+                  <option value="draft">Draft</option>
+                </select>
+              </div>
+              {publishRolloutState === "shadow" && <p className="text-xs text-muted-foreground">Shadow mode allows execution while recording the policy verdict as Would deny.</p>}
+              {!canEdit && <p className="text-xs text-destructive">Requires editor role or higher.</p>}
+              <Button type="submit" disabled={pending === "publish" || !canEdit}>{pending === "publish" ? "Publishing..." : "Publish candidate"}</Button>
+            </form>
+
             <form className="grid gap-3 rounded-md border p-4" onSubmit={(e) => void handlePromote(e)}>
               <p className="text-sm font-medium">Promote bundle</p>
               <div className="grid gap-2">
@@ -579,7 +634,7 @@ export function OperationsWorkbench(props: Props) {
                   onChange={(e) => setPromoteBundleId(e.target.value)}
                 >
                   <option value="">Select bundle</option>
-                  {props.bundles.map((bundle) => (
+                  {bundles.map((bundle) => (
                     <option key={bundle.id} value={bundle.id}>
                       {shortID(bundle.id, 14)} · {bundleStatusLabel(bundle.status)} · {formatTimestamp(bundle.createdAt)}
                     </option>

@@ -168,6 +168,10 @@ func (e *Engine) evaluate(ctx context.Context, req schema.CanonicalRequest, issu
 		e.record(decisionCtx, req, decision, startedAt)
 		return Result{Decision: decision}, err
 	}
+	if err := decision.ValidateRollout(); err != nil {
+		span.RecordError(err)
+		return Result{Decision: decision}, err
+	}
 	// Decider implementations should return pdp.ErrDeniedByPolicy for a deny,
 	// but the permit boundary cannot rely on every adapter or test double doing
 	// so. An explicit false decision is never eligible for a permit.
@@ -194,20 +198,24 @@ func (e *Engine) evaluate(ctx context.Context, req schema.CanonicalRequest, issu
 
 func (e *Engine) record(ctx context.Context, req schema.CanonicalRequest, decision schema.Decision, startedAt time.Time) {
 	latency := time.Since(startedAt)
-	e.telemetry.ObserveDecision(req.ToolName, decision.Allow, latency)
+	e.telemetry.ObserveDecision(req.ToolName, decision.Allow, decision.PolicyAllow, decision.EnforcementMode, latency)
 	if e.audit == nil {
 		return
 	}
 	e.audit.Record(ctx, audit.Event{
-		DecisionID:    decision.DecisionID,
-		RequestID:     req.Metadata.RequestID,
-		TraceID:       req.Metadata.TraceID,
-		TenantID:      req.Metadata.TenantID,
-		ToolName:      req.ToolName,
-		Allow:         decision.Allow,
-		Reason:        decision.Reason,
-		PolicyVersion: decision.PolicyVersion,
-		Latency:       latency,
+		DecisionID:      decision.DecisionID,
+		RequestID:       req.Metadata.RequestID,
+		TraceID:         req.Metadata.TraceID,
+		TenantID:        req.Metadata.TenantID,
+		ToolName:        req.ToolName,
+		Allow:           decision.Allow,
+		PolicyAllow:     decision.PolicyAllow,
+		EnforcementMode: decision.EnforcementMode,
+		Reason:          decision.Reason,
+		PolicyPackage:   decision.PolicyPackage,
+		PolicyVersion:   decision.PolicyVersion,
+		DataRevision:    decision.DataRevision,
+		Latency:         latency,
 	})
 }
 

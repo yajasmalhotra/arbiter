@@ -37,7 +37,7 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Pr
 
   const params = await searchParams;
   const rawOutcome = one(params.outcome);
-  const outcome = rawOutcome === "allow" || rawOutcome === "deny" ? rawOutcome : undefined;
+  const outcome = rawOutcome === "allow" || rawOutcome === "deny" || rawOutcome === "would-deny" ? rawOutcome : undefined;
   const toolName = one(params.tool);
   const identifier = one(params.id);
   const before = one(params.before);
@@ -82,6 +82,7 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Pr
                 <option value="">All outcomes</option>
                 <option value="allow">Allowed</option>
                 <option value="deny">Denied</option>
+                <option value="would-deny">Would deny (shadow)</option>
               </select>
             </div>
             <div className="grid gap-2">
@@ -115,15 +116,18 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Pr
                   <tr><th className="px-3 py-2">Outcome</th><th className="px-3 py-2">Tool</th><th className="px-3 py-2">Reason</th><th className="px-3 py-2">Decision</th><th className="px-3 py-2">When</th></tr>
                 </thead>
                 <tbody>
-                  {decisions.map((decision) => (
+                  {decisions.map((decision) => {
+                    const wouldDeny = decision.enforcementMode === "shadow" && decision.policyAllowed === false;
+                    return (
                     <tr key={decision.id} className="border-t align-top">
-                      <td className="px-3 py-3"><Badge variant={decision.allowed === false ? "destructive" : "secondary"}>{decision.allowed === false ? "Denied" : decision.allowed === true ? "Allowed" : "Recorded"}</Badge></td>
+                      <td className="px-3 py-3"><Badge variant={decision.allowed === false ? "destructive" : wouldDeny ? "outline" : "secondary"}>{decision.allowed === false ? "Denied" : wouldDeny ? "Would deny" : decision.allowed === true ? "Allowed" : "Recorded"}</Badge></td>
                       <td className="px-3 py-3 font-mono text-xs">{decision.toolName ?? "unknown"}</td>
                       <td className="max-w-sm px-3 py-3 text-muted-foreground">{decision.reason ?? "No reason recorded"}</td>
-                      <td className="px-3 py-3 font-mono text-xs"><div>{decision.decisionId ?? "—"}</div>{decision.policyVersion && <div className="mt-1 text-muted-foreground">policy {decision.policyVersion}</div>}</td>
+                      <td className="px-3 py-3 font-mono text-xs"><div>{decision.decisionId ?? "—"}</div>{decision.policyVersion && <div className="mt-1 text-muted-foreground">policy {decision.policyVersion}</div>}{decision.dataRevision && <div className="mt-1 text-muted-foreground">data {decision.dataRevision}</div>}{decision.enforcementMode && <div className="mt-1 text-muted-foreground">mode {decision.enforcementMode}</div>}</td>
                       <td className="px-3 py-3 text-xs text-muted-foreground"><div>{formatTimestamp(decision.at)}</div>{decision.latencyMs !== undefined && <div className="mt-1">{Math.round(decision.latencyMs)} ms</div>}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

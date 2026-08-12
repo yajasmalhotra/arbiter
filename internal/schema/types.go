@@ -22,6 +22,7 @@ var (
 	ErrMissingToolName          = errors.New("missing tool name")
 	ErrInvalidParams            = errors.New("parameters must be valid json")
 	ErrUnsupportedSchemaVersion = errors.New("unsupported schema version")
+	ErrInvalidRolloutDecision   = errors.New("invalid rollout decision")
 )
 
 type Metadata struct {
@@ -145,12 +146,45 @@ type CanonicalRequest struct {
 
 type Decision struct {
 	Allow                  bool   `json:"allow"`
+	PolicyAllow            *bool  `json:"policy_allow,omitempty"`
+	EnforcementMode        string `json:"enforcement_mode,omitempty"`
 	Reason                 string `json:"reason"`
 	PolicyPackage          string `json:"policy_package"`
 	PolicyVersion          string `json:"policy_version"`
 	DataRevision           string `json:"data_revision"`
 	DecisionID             string `json:"decision_id"`
 	RequiredContextMissing bool   `json:"required_context_missing,omitempty"`
+}
+
+// EvaluatedAllow returns the policy's raw verdict before a non-enforcing
+// rollout mode changes the effective decision. Older policy backends omit the
+// field, in which case the effective verdict remains authoritative.
+func (d Decision) EvaluatedAllow() bool {
+	if d.PolicyAllow != nil {
+		return *d.PolicyAllow
+	}
+	return d.Allow
+}
+
+// ValidateRollout prevents a malformed policy response from using rollout
+// metadata to create an ambiguous permit decision. Empty mode remains valid
+// for backward-compatible policy backends.
+func (d Decision) ValidateRollout() error {
+	switch d.EnforcementMode {
+	case "":
+		return nil
+	case "enforce":
+		if d.PolicyAllow == nil || d.Allow != *d.PolicyAllow {
+			return ErrInvalidRolloutDecision
+		}
+	case "shadow":
+		if d.PolicyAllow == nil || !d.Allow {
+			return ErrInvalidRolloutDecision
+		}
+	default:
+		return ErrInvalidRolloutDecision
+	}
+	return nil
 }
 
 type SignedDecision struct {

@@ -73,15 +73,16 @@ export default async function HomePage() {
           <CardTitle className="text-lg">Enforcement overview</CardTitle>
           <CardDescription>Runtime decisions for this tenant in the last {runtimeSummary.windowHours} hours</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-4">
+        <CardContent className="grid gap-4 md:grid-cols-5">
           <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Total decisions</p><p className="mt-1 text-2xl font-semibold">{runtimeSummary.total}</p></div>
           <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Denied</p><p className="mt-1 text-2xl font-semibold">{runtimeSummary.denied}</p></div>
-          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Denial rate</p><p className="mt-1 text-2xl font-semibold">{(runtimeSummary.denialRate * 100).toFixed(1)}%</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Would deny</p><p className="mt-1 text-2xl font-semibold">{runtimeSummary.shadowDenied}</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Policy deny rate</p><p className="mt-1 text-2xl font-semibold">{(runtimeSummary.policyDenialRate * 100).toFixed(1)}%</p></div>
           <div className="rounded-md border p-3">
             <p className="text-xs text-muted-foreground">Top denied tools</p>
             {runtimeSummary.topDeniedTools.length === 0 ? <p className="mt-2 text-sm">None</p> : <div className="mt-2 flex flex-wrap gap-1">{runtimeSummary.topDeniedTools.slice(0, 3).map((tool) => <Badge key={tool.toolName} variant="outline">{tool.toolName} · {tool.count}</Badge>)}</div>}
           </div>
-          <Button variant="link" className="h-auto w-fit p-0 md:col-span-4" asChild><Link href="/decisions">Open decision explorer →</Link></Button>
+          <Button variant="link" className="h-auto w-fit p-0 md:col-span-5" asChild><Link href="/decisions">Open decision explorer →</Link></Button>
         </CardContent>
       </Card>
 
@@ -147,11 +148,13 @@ export default async function HomePage() {
             <p className="text-sm text-muted-foreground">No runtime decisions have been recorded yet.</p>
           ) : (
             <ul className="space-y-3">
-              {runtimeDecisions.map((decision) => (
+              {runtimeDecisions.map((decision) => {
+                const wouldDeny = decision.enforcementMode === "shadow" && decision.policyAllowed === false;
+                return (
                 <li key={decision.id} className="flex flex-wrap items-start justify-between gap-3 border-b pb-3 last:border-0 last:pb-0">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={decision.allowed === false ? "destructive" : "secondary"}>{decision.allowed === false ? "Denied" : decision.allowed === true ? "Allowed" : "Recorded"}</Badge>
+                      <Badge variant={decision.allowed === false ? "destructive" : wouldDeny ? "outline" : "secondary"}>{decision.allowed === false ? "Denied" : wouldDeny ? "Would deny" : decision.allowed === true ? "Allowed" : "Recorded"}</Badge>
                       <span className="font-mono text-xs">{decision.toolName ?? "unknown tool"}</span>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">{decision.reason ?? "No decision reason recorded"}</p>
@@ -162,7 +165,8 @@ export default async function HomePage() {
                     {decision.latencyMs !== undefined && <p>{Math.round(decision.latencyMs)} ms</p>}
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
           <Button variant="link" className="mt-3 h-auto p-0" asChild>

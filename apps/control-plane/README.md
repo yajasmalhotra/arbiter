@@ -125,13 +125,15 @@ introducing unsealed rows into the governance audit chain; gateway readiness
 fails if its bounded runtime-audit queue drops an event or Postgres persistence
 fails.
 
-Use `/decisions` to investigate runtime outcomes with exact outcome, tool, and
+Use `/decisions` to investigate runtime outcomes with exact allow, deny,
+would-deny, tool, and
 decision/request/trace-ID filters. Queries are tenant-scoped, bounded to 100
 records, and cursor-paginated; only normalized decision metadata is returned,
 never raw tool parameters.
 
-The dashboard summarizes the last 24 hours of enforcement volume, denials,
-denial rate, and top denied tools. Automation can read the same tenant-scoped
+The dashboard summarizes the last 24 hours of enforcement volume, blocked
+calls, shadow would-deny calls, policy denial rate, and top blocked tools.
+Automation can read the same tenant-scoped
 aggregate from `GET /api/runtime-audit/summary?hours=24`; the window is bounded
 between one hour and 30 days.
 
@@ -158,6 +160,18 @@ Production channel safeguards:
 - A production requester cannot approve their own request. The control plane
   enforces this separation of duties in the store transaction, so it holds for
   API and dashboard clients alike.
+
+Observe-before-enforce rollout:
+
+- Bundles published with `rolloutState=shadow` carry a signed
+  `enforcement_mode=shadow` into OPA data and the bundle manifest.
+- Policy still computes the raw verdict, but a shadow denial becomes an
+  effective allow. Runtime audit records retain both `allow=true` and
+  `policy_allow=false`, along with the policy package/version and data revision.
+- The dashboard and decision explorer label and filter these calls as
+  **Would deny**, and `/metrics` exposes `arbiter_shadow_would_deny_total`.
+- Promotion to the production channel changes the bundle to `enforced` before
+  it is served. Shadow mode cannot silently carry into production.
 
 Bundle artifact endpoints require `Authorization: Bearer <token>` and validate against `ARBITER_BUNDLE_SERVICE_TOKEN`/`ARBITER_BUNDLE_SERVICE_TOKEN_SCOPES`.
 Published bundle archives include `.signatures.json` and are signed by the active signing key.

@@ -43,6 +43,7 @@ export function isPolicyTestInterceptPath(value: unknown): value is string {
 
 export function classifyPolicyTestOutcome(status: number, response: unknown): PolicyTestOutcome {
   const decision = asRecord(asRecord(response).decision);
+  if (typeof decision.policy_allow === "boolean") return decision.policy_allow ? "allow" : "deny";
   if (typeof decision.allow === "boolean") return decision.allow ? "allow" : "deny";
   if (status === 403) return "deny";
   if (status >= 200 && status < 300) return "allow";

@@ -10,39 +10,43 @@ import (
 )
 
 type Recorder interface {
-	ObserveDecision(toolName string, allow bool, latency time.Duration)
+	ObserveDecision(toolName string, allow bool, policyAllow *bool, enforcementMode string, latency time.Duration)
 }
 
 type NopRecorder struct{}
 
-func (NopRecorder) ObserveDecision(string, bool, time.Duration) {}
+func (NopRecorder) ObserveDecision(string, bool, *bool, string, time.Duration) {}
 
 type CounterRecorder struct {
 	decisionsTotal    atomic.Uint64
 	decisionsAllow    atomic.Uint64
 	decisionsDeny     atomic.Uint64
+	shadowWouldDeny   atomic.Uint64
 	latencyNanosTotal atomic.Uint64
 	perTool           sync.Map
 	histogram         latencyHistogram
 }
 
 type toolCounters struct {
-	allow atomic.Uint64
-	deny  atomic.Uint64
+	allow           atomic.Uint64
+	deny            atomic.Uint64
+	shadowWouldDeny atomic.Uint64
 }
 
 type Snapshot struct {
 	DecisionsTotal    uint64
 	DecisionsAllow    uint64
 	DecisionsDeny     uint64
+	ShadowWouldDeny   uint64
 	LatencyNanosTotal uint64
 	LatencyBuckets    map[float64]uint64
 	ToolBreakdown     map[string]ToolSnapshot
 }
 
 type ToolSnapshot struct {
-	Allow uint64
-	Deny  uint64
+	Allow           uint64
+	Deny            uint64
+	ShadowWouldDeny uint64
 }
 
 func NewCounterRecorder() *CounterRecorder {
@@ -62,12 +66,16 @@ func NewCounterRecorder() *CounterRecorder {
 	}
 }
 
-func (r *CounterRecorder) ObserveDecision(toolName string, allow bool, latency time.Duration) {
+func (r *CounterRecorder) ObserveDecision(toolName string, allow bool, policyAllow *bool, enforcementMode string, latency time.Duration) {
 	r.decisionsTotal.Add(1)
 	if allow {
 		r.decisionsAllow.Add(1)
 	} else {
 		r.decisionsDeny.Add(1)
+	}
+	shadowDenied := enforcementMode == "shadow" && policyAllow != nil && !*policyAllow
+	if shadowDenied {
+		r.shadowWouldDeny.Add(1)
 	}
 
 	if latency > 0 {
@@ -81,6 +89,9 @@ func (r *CounterRecorder) ObserveDecision(toolName string, allow bool, latency t
 
 	value, _ := r.perTool.LoadOrStore(toolName, &toolCounters{})
 	counters := value.(*toolCounters)
+	if shadowDenied {
+		counters.shadowWouldDeny.Add(1)
+	}
 	if allow {
 		counters.allow.Add(1)
 		return
@@ -93,6 +104,7 @@ func (r *CounterRecorder) Snapshot() Snapshot {
 		DecisionsTotal:    r.decisionsTotal.Load(),
 		DecisionsAllow:    r.decisionsAllow.Load(),
 		DecisionsDeny:     r.decisionsDeny.Load(),
+		ShadowWouldDeny:   r.shadowWouldDeny.Load(),
 		LatencyNanosTotal: r.latencyNanosTotal.Load(),
 		LatencyBuckets:    r.histogram.Snapshot(),
 		ToolBreakdown:     make(map[string]ToolSnapshot),
@@ -102,8 +114,9 @@ func (r *CounterRecorder) Snapshot() Snapshot {
 		toolName := key.(string)
 		counters := value.(*toolCounters)
 		snapshot.ToolBreakdown[toolName] = ToolSnapshot{
-			Allow: counters.allow.Load(),
-			Deny:  counters.deny.Load(),
+			Allow:           counters.allow.Load(),
+			Deny:            counters.deny.Load(),
+			ShadowWouldDeny: counters.shadowWouldDeny.Load(),
 		}
 		return true
 	})
@@ -118,6 +131,7 @@ func (r *CounterRecorder) Handler() http.HandlerFunc {
 		_, _ = fmt.Fprintf(w, "arbiter_decisions_total %d\n", snapshot.DecisionsTotal)
 		_, _ = fmt.Fprintf(w, "arbiter_decisions_allow_total %d\n", snapshot.DecisionsAllow)
 		_, _ = fmt.Fprintf(w, "arbiter_decisions_deny_total %d\n", snapshot.DecisionsDeny)
+		_, _ = fmt.Fprintf(w, "arbiter_shadow_would_deny_total %d\n", snapshot.ShadowWouldDeny)
 		_, _ = fmt.Fprintf(w, "arbiter_decision_latency_nanos_total %d\n", snapshot.LatencyNanosTotal)
 		for upperBound, count := range snapshot.LatencyBuckets {
 			label := fmt.Sprintf("%g", upperBound)
@@ -130,6 +144,7 @@ func (r *CounterRecorder) Handler() http.HandlerFunc {
 		for toolName, counters := range snapshot.ToolBreakdown {
 			_, _ = fmt.Fprintf(w, "arbiter_tool_decisions_allow_total{tool_name=%q} %d\n", toolName, counters.Allow)
 			_, _ = fmt.Fprintf(w, "arbiter_tool_decisions_deny_total{tool_name=%q} %d\n", toolName, counters.Deny)
+			_, _ = fmt.Fprintf(w, "arbiter_tool_shadow_would_deny_total{tool_name=%q} %d\n", toolName, counters.ShadowWouldDeny)
 		}
 	}
 }

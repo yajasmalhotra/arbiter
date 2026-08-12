@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   const outcome = request.nextUrl.searchParams.get("outcome");
   const decisions = await listRuntimeDecisionEvents({
     limit: Number(request.nextUrl.searchParams.get("limit") ?? "10"),
-    outcome: outcome === "allow" || outcome === "deny" ? outcome : undefined,
+    outcome: outcome === "allow" || outcome === "deny" || outcome === "would-deny" ? outcome : undefined,
     toolName: request.nextUrl.searchParams.get("tool") ?? undefined,
     identifier: request.nextUrl.searchParams.get("id") ?? undefined,
     before: request.nextUrl.searchParams.get("before") ?? undefined,

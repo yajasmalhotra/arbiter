@@ -42,6 +42,7 @@ import type {
 
 const gzip = promisify(gzipCallback);
 const CHANNELS = new Set(["dev", "staging", "prod"]);
+const ROLLOUT_STATES = new Set<RolloutState>(["draft", "shadow", "canary", "enforced", "rolled_back"]);
 
 type BundleChannel = "dev" | "staging" | "prod";
 
@@ -311,6 +312,8 @@ type BundleManifest = {
   digest: string;
   policyRevisionId: string;
   dataRevisionId: string;
+  rolloutState: RolloutState;
+  enforcementMode: "enforce" | "shadow";
   artifactPath: string;
   signingKeyID: string;
   signingScope: string;
@@ -1715,15 +1718,19 @@ export function runtimeDecisionEventFromRow(row: Record<string, unknown>): Runti
     traceId: typeof metadata.trace_id === "string" ? metadata.trace_id : undefined,
     toolName: typeof metadata.tool_name === "string" ? metadata.tool_name : undefined,
     allowed: typeof metadata.allow === "boolean" ? metadata.allow : undefined,
+    policyAllowed: typeof metadata.policy_allow === "boolean" ? metadata.policy_allow : undefined,
+    enforcementMode: typeof metadata.enforcement_mode === "string" ? metadata.enforcement_mode : undefined,
     reason: typeof metadata.reason === "string" ? metadata.reason : undefined,
+    policyPackage: typeof metadata.policy_package === "string" ? metadata.policy_package : undefined,
     policyVersion: typeof metadata.policy_version === "string" ? metadata.policy_version : undefined,
+    dataRevision: typeof metadata.data_revision === "string" ? metadata.data_revision : undefined,
     latencyMs: Number.isFinite(latency) ? latency : undefined
   };
 }
 
 export type RuntimeDecisionQuery = {
   limit?: number;
-  outcome?: "allow" | "deny";
+  outcome?: "allow" | "deny" | "would-deny";
   toolName?: string;
   identifier?: string;
   before?: string;
@@ -1732,7 +1739,7 @@ export type RuntimeDecisionQuery = {
 
 export type NormalizedRuntimeDecisionQuery = {
   limit: number;
-  outcome?: "allow" | "deny";
+  outcome?: "allow" | "deny" | "would-deny";
   toolName?: string;
   identifier?: string;
   before?: string;
@@ -1746,7 +1753,7 @@ function boundedQueryValue(value: string | undefined, maxLength: number): string
 
 export function normalizeRuntimeDecisionQuery(query: RuntimeDecisionQuery = {}): NormalizedRuntimeDecisionQuery {
   const limit = Math.max(1, Math.min(Math.floor(Number(query.limit)) || 10, 100));
-  const outcome = query.outcome === "allow" || query.outcome === "deny" ? query.outcome : undefined;
+  const outcome = query.outcome === "allow" || query.outcome === "deny" || query.outcome === "would-deny" ? query.outcome : undefined;
   const beforeDate = query.before ? new Date(query.before) : undefined;
   const before = beforeDate && Number.isFinite(beforeDate.getTime()) ? beforeDate.toISOString() : undefined;
   return {
@@ -1769,7 +1776,12 @@ export async function listRuntimeDecisionEvents(query: RuntimeDecisionQuery = {}
           FROM runtime_audit_events
           WHERE tenant_id = $1
             AND action = 'intercept_decision'
-            AND ($2::text IS NULL OR metadata->>'allow' = $2)
+            AND (
+              $2::text IS NULL
+              OR ($2 = 'allow' AND metadata->>'allow' = 'true' AND COALESCE(metadata->>'policy_allow', 'true') = 'true')
+              OR ($2 = 'deny' AND metadata->>'allow' = 'false')
+              OR ($2 = 'would-deny' AND metadata->>'allow' = 'true' AND metadata->>'policy_allow' = 'false' AND metadata->>'enforcement_mode' = 'shadow')
+            )
             AND ($3::text IS NULL OR metadata->>'tool_name' = $3)
             AND ($4::text IS NULL OR metadata->>'decision_id' = $4 OR metadata->>'request_id' = $4 OR metadata->>'trace_id' = $4)
             AND ($5::timestamptz IS NULL OR at < $5::timestamptz OR (at = $5::timestamptz AND ($6::text IS NULL OR id < $6)))
@@ -1778,7 +1790,7 @@ export async function listRuntimeDecisionEvents(query: RuntimeDecisionQuery = {}
         `,
         [
           defaultTenantId(),
-          normalized.outcome === "allow" ? "true" : normalized.outcome === "deny" ? "false" : null,
+          normalized.outcome ?? null,
           normalized.toolName ?? null,
           normalized.identifier ?? null,
           normalized.before ?? null,
@@ -1805,14 +1817,17 @@ export function runtimeDecisionSummaryFromRows(
   const total = nonNegativeInteger(counts.total);
   const allowed = nonNegativeInteger(counts.allowed);
   const denied = nonNegativeInteger(counts.denied);
+  const shadowDenied = nonNegativeInteger(counts.shadow_denied);
   const recorded = Math.max(0, total - allowed - denied);
   return {
     windowHours,
     total,
     allowed,
     denied,
+    shadowDenied,
     recorded,
     denialRate: total > 0 ? denied / total : 0,
+    policyDenialRate: total > 0 ? (denied + shadowDenied) / total : 0,
     topDeniedTools: deniedToolRows
       .map((row) => ({
         toolName: typeof row.tool_name === "string" && row.tool_name.trim() ? row.tool_name : "unknown",
@@ -1833,7 +1848,8 @@ export async function getRuntimeDecisionSummary(windowHours = 24): Promise<Runti
             SELECT
               COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE metadata->>'allow' = 'true')::int AS allowed,
-              COUNT(*) FILTER (WHERE metadata->>'allow' = 'false')::int AS denied
+              COUNT(*) FILTER (WHERE metadata->>'allow' = 'false')::int AS denied,
+              COUNT(*) FILTER (WHERE metadata->>'allow' = 'true' AND metadata->>'policy_allow' = 'false' AND metadata->>'enforcement_mode' = 'shadow')::int AS shadow_denied
             FROM runtime_audit_events
             WHERE tenant_id = $1 AND action = 'intercept_decision' AND at >= $2
           `,
@@ -2081,6 +2097,9 @@ export async function listBundleActivations(): Promise<BundleActivation[]> {
 }
 
 export async function publishBundle(input: PublishBundleInput = {}): Promise<BundleArtifact> {
+  if (input.rolloutState && !ROLLOUT_STATES.has(input.rolloutState)) {
+    throw new Error(`invalid rollout state: ${input.rolloutState}`);
+  }
   const actor = authoritativeActor(input.actor);
   return withDbOrFallback(
     async (db) => {
@@ -2804,7 +2823,7 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
     async (db) => {
       let result = await db.query(
         `
-          SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id
+          SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id, b.rollout_state
           FROM bundle_channels c
           JOIN bundles b ON b.id = c.bundle_id
           WHERE c.tenant_id = $1 AND c.channel = $2
@@ -2823,7 +2842,7 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         });
         result = await db.query(
           `
-            SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id
+            SELECT b.id, b.digest, b.policy_revision_id, b.data_revision_id, b.rollout_state
             FROM bundle_channels c
             JOIN bundles b ON b.id = c.bundle_id
             WHERE c.tenant_id = $1 AND c.channel = $2
@@ -2836,12 +2855,15 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         return null;
       }
       const row = result.rows[0] as Record<string, unknown>;
+      const rolloutState = String(row.rollout_state) as RolloutState;
       return {
         channel,
         bundleId: String(row.id),
         digest: String(row.digest),
         policyRevisionId: String(row.policy_revision_id),
         dataRevisionId: String(row.data_revision_id),
+        rolloutState,
+        enforcementMode: rolloutState === "shadow" ? "shadow" : "enforce",
         artifactPath: `/api/bundles/artifacts/${encodeURIComponent(String(row.id))}`,
         signingKeyID: signing.keyID,
         signingScope: signing.scope,
@@ -2872,6 +2894,8 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
           digest: promoted.digest,
           policyRevisionId: promoted.policyRevisionId,
           dataRevisionId: promoted.dataRevisionId,
+          rolloutState: promoted.rolloutState,
+          enforcementMode: promoted.rolloutState === "shadow" ? "shadow" : "enforce",
           artifactPath: `/api/bundles/artifacts/${encodeURIComponent(promoted.id)}`,
           signingKeyID: signing.keyID,
           signingScope: signing.scope,
@@ -2885,6 +2909,8 @@ export async function getChannelManifest(channel: BundleChannel): Promise<Bundle
         digest: bundle.digest,
         policyRevisionId: bundle.policyRevisionId,
         dataRevisionId: bundle.dataRevisionId,
+        rolloutState: bundle.rolloutState,
+        enforcementMode: bundle.rolloutState === "shadow" ? "shadow" : "enforce",
         artifactPath: `/api/bundles/artifacts/${encodeURIComponent(bundle.id)}`,
         signingKeyID: signing.keyID,
         signingScope: signing.scope,
@@ -3058,13 +3084,19 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
     entries.push({ name, payload });
   };
 
+  const enforcementMode = bundle.rolloutState === "shadow" ? "shadow" : "enforce";
+  const runtimeRevision = createHash("sha256")
+    .update(`${bundle.digest}:${bundle.rolloutState}`)
+    .digest("hex");
   const manifest = {
-    revision: bundle.digest,
+    revision: runtimeRevision,
     roots: [""],
     metadata: {
       bundle_id: bundle.id,
       policy_revision_id: bundle.policyRevisionId,
       data_revision_id: bundle.dataRevisionId,
+      rollout_state: bundle.rolloutState,
+      enforcement_mode: enforcementMode,
       created_at: createdAt,
       signing_key_id: signing.keyID,
       signing_scope: signing.scope
@@ -3103,11 +3135,15 @@ async function buildBundleArchive(bundle: BundleArtifact): Promise<Buffer> {
   arbiterData.config = {
     ...config,
     policy_version: bundle.policyRevisionId,
-    data_revision: bundle.dataRevisionId
+    data_revision: bundle.dataRevisionId,
+    rollout_state: bundle.rolloutState,
+    enforcement_mode: enforcementMode
   };
   arbiterData.control_plane_bundle = {
     bundle_id: bundle.id,
     digest: bundle.digest,
+    rollout_state: bundle.rolloutState,
+    enforcement_mode: enforcementMode,
     snapshot: bundle.snapshot,
     signing: {
       algorithm: signing.algorithm,

@@ -152,14 +152,20 @@ func (r *PostgresRecorder) persist(ctx context.Context, event Event) error {
 	}
 
 	metadata := map[string]any{
-		"decision_id":    event.DecisionID,
-		"request_id":     event.RequestID,
-		"trace_id":       event.TraceID,
-		"tool_name":      event.ToolName,
-		"allow":          event.Allow,
-		"reason":         event.Reason,
-		"policy_version": event.PolicyVersion,
-		"latency_ms":     float64(event.Latency) / float64(time.Millisecond),
+		"decision_id":      event.DecisionID,
+		"request_id":       event.RequestID,
+		"trace_id":         event.TraceID,
+		"tool_name":        event.ToolName,
+		"allow":            event.Allow,
+		"enforcement_mode": event.EnforcementMode,
+		"reason":           event.Reason,
+		"policy_package":   event.PolicyPackage,
+		"policy_version":   event.PolicyVersion,
+		"data_revision":    event.DataRevision,
+		"latency_ms":       float64(event.Latency) / float64(time.Millisecond),
+	}
+	if event.PolicyAllow != nil {
+		metadata["policy_allow"] = *event.PolicyAllow
 	}
 	raw, err := json.Marshal(metadata)
 	if err != nil {

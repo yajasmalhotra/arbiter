@@ -21,6 +21,14 @@
         "allow": {
           "type": "boolean"
         },
+        "policy_allow": {
+          "type": "boolean",
+          "description": "Raw policy verdict before rollout mode changes the effective allow field."
+        },
+        "enforcement_mode": {
+          "type": "string",
+          "enum": ["enforce", "shadow"]
+        },
         "reason": {
           "type": "string"
         },

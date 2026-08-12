@@ -266,3 +266,50 @@ test_apply_patch_canary_path_denied if {
 	not result.allow
 	result.reason == "tool policy denied"
 }
+
+test_shadow_mode_reports_would_deny_without_blocking if {
+	result := authz.decision with input as {
+		"schema_version": "v1alpha1",
+		"metadata": {"request_id": "shadow-delete", "tenant_id": "tenant-local"},
+		"agent_context": {"actor": {"id": "shadow-agent", "type": "agent"}},
+		"tool_name": "bash",
+		"parameters": {"command": "mkdir -p /tmp/arbiter-deny-test/shadow"},
+	} with data.arbiter.config.enforcement_mode as "shadow"
+
+	result.allow
+	not result.policy_allow
+	result.enforcement_mode == "shadow"
+	result.reason == "tool policy denied"
+}
+
+test_shadow_mode_observes_missing_approval_without_planning_it if {
+	request := {
+		"schema_version": "v1alpha1",
+		"metadata": {"request_id": "shadow-approval", "tenant_id": "tenant-local"},
+		"agent_context": {"actor": {"id": "shadow-agent", "type": "agent"}},
+		"tool_name": "create_stripe_refund",
+		"parameters": {"amount_cents": 1000},
+	}
+	result := authz.decision with input as request with data.arbiter.config.enforcement_mode as "shadow"
+	planned := authz.obligations with input as request with data.arbiter.config.enforcement_mode as "shadow"
+
+	result.allow
+	not result.policy_allow
+	result.required_context_missing
+	result.reason == "required context missing"
+	planned == []
+}
+
+test_shadow_mode_preserves_raw_allow if {
+	result := authz.decision with input as {
+		"schema_version": "v1alpha1",
+		"metadata": {"request_id": "shadow-allow", "tenant_id": "tenant-local"},
+		"agent_context": {"actor": {"id": "shadow-agent", "type": "agent"}},
+		"tool_name": "bash",
+		"parameters": {"command": "pwd"},
+	} with data.arbiter.config.enforcement_mode as "shadow"
+
+	result.allow
+	result.policy_allow
+	result.reason == "allowed"
+}

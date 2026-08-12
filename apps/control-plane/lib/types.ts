@@ -41,8 +41,12 @@ export type RuntimeDecisionEvent = {
   traceId?: string;
   toolName?: string;
   allowed?: boolean;
+  policyAllowed?: boolean;
+  enforcementMode?: string;
   reason?: string;
+  policyPackage?: string;
   policyVersion?: string;
+  dataRevision?: string;
   latencyMs?: number;
 };
 
@@ -51,8 +55,10 @@ export type RuntimeDecisionSummary = {
   total: number;
   allowed: number;
   denied: number;
+  shadowDenied: number;
   recorded: number;
   denialRate: number;
+  policyDenialRate: number;
   topDeniedTools: Array<{ toolName: string; count: number }>;
 };
 
@@ -120,6 +126,8 @@ export type BundleChannel = {
   digest: string;
   policyRevisionId: string;
   dataRevisionId: string;
+  rolloutState: RolloutState;
+  enforcementMode: "enforce" | "shadow";
 };
 
 export type ApprovalRequest = {

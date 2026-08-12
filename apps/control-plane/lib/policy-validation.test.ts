@@ -18,6 +18,12 @@ describe("policy validation outcomes", () => {
     expect(classifyPolicyTestOutcome(403, { decision: { allow: true } })).toBe("allow");
   });
 
+  it("uses the raw policy verdict for shadow-mode regression assertions", () => {
+    expect(classifyPolicyTestOutcome(200, {
+      decision: { allow: true, policy_allow: false, enforcement_mode: "shadow" }
+    })).toBe("deny");
+  });
+
   it("distinguishes policy denials from operational errors", () => {
     expect(classifyPolicyTestOutcome(403, {})).toBe("deny");
     expect(classifyPolicyTestOutcome(503, { error: "OPA unavailable" })).toBe("error");

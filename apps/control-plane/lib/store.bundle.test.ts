@@ -10,7 +10,7 @@ const MOCK_BUNDLE = {
   id: "bundle_test_prod",
   policyRevisionId: "pr_test_bundle",
   dataRevisionId: "dr_test_bundle",
-  rolloutState: "enforced",
+  rolloutState: "shadow",
   digest: "digest_test_bundle",
   status: "active",
   createdBy: "test",
@@ -173,15 +173,31 @@ describe("bundle archive regression coverage", () => {
 
     const data = JSON.parse((files.get("data.json") as Buffer).toString("utf8")) as {
       arbiter: {
-        config: { policy_version: string; data_revision: string };
+        config: { policy_version: string; data_revision: string; rollout_state: string; enforcement_mode: string };
         tools: Record<string, { domain: string }>;
       };
     };
 
     expect(data.arbiter.config.policy_version).toMatch(/^pr_/);
     expect(data.arbiter.config.data_revision).toMatch(/^dr_/);
+    expect(data.arbiter.config.rollout_state).toBe("shadow");
+    expect(data.arbiter.config.enforcement_mode).toBe("shadow");
     expect(data.arbiter.tools.send_slack_message.domain).toBe("slack");
     expect(data.arbiter.tools.run_sql_query.domain).toBe("sql");
+  });
+
+  it("rejects unknown rollout modes before persisting a bundle", async () => {
+    const { publishBundle } = await import("./store");
+    await expect(publishBundle({ rolloutState: "observe-ish" as never })).rejects.toThrow("invalid rollout state");
+  });
+
+  it("binds rollout semantics into the OPA runtime revision", () => {
+    const manifest = JSON.parse((files.get(".manifest") as Buffer).toString("utf8")) as {
+      revision: string;
+      metadata: { rollout_state: string; enforcement_mode: string };
+    };
+    expect(manifest.revision).toBe(sha256Hex(`${MOCK_BUNDLE.digest}:shadow`));
+    expect(manifest.metadata).toMatchObject({ rollout_state: "shadow", enforcement_mode: "shadow" });
   });
 
   it("hashes .manifest and data.json canonically while keeping snapshot.json raw", () => {

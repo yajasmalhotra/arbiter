@@ -63,6 +63,50 @@ func TestEngineIssuesPermitForAllowedRequest(t *testing.T) {
 	}
 }
 
+func TestEngineIssuesPermitForEffectiveShadowAllow(t *testing.T) {
+	t.Parallel()
+	policyAllow := false
+	engine := newTestEngine(state.NewMemoryStore(), deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {
+		return schema.Decision{
+			Allow:           true,
+			PolicyAllow:     &policyAllow,
+			EnforcementMode: "shadow",
+			DecisionID:      req.Metadata.RequestID,
+			Reason:          "tool policy denied",
+			PolicyVersion:   "shadow-test",
+		}, nil
+	}))
+
+	result, err := engine.Enforce(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("shadow enforce: %v", err)
+	}
+	if result.Token == "" || !result.Decision.Allow || result.Decision.EvaluatedAllow() {
+		t.Fatalf("expected effective allow with a raw policy deny, got %#v", result)
+	}
+}
+
+func TestEngineRejectsAmbiguousRolloutDecision(t *testing.T) {
+	t.Parallel()
+	policyAllow := false
+	engine := newTestEngine(state.NewMemoryStore(), deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {
+		return schema.Decision{
+			Allow:           true,
+			PolicyAllow:     &policyAllow,
+			EnforcementMode: "enforce",
+			DecisionID:      req.Metadata.RequestID,
+		}, nil
+	}))
+
+	result, err := engine.Enforce(context.Background(), testRequest())
+	if err != schema.ErrInvalidRolloutDecision {
+		t.Fatalf("expected malformed rollout decision to fail closed, got %v", err)
+	}
+	if result.Token != "" {
+		t.Fatalf("malformed rollout decision minted a permit: %#v", result)
+	}
+}
+
 func TestEnginePreservesPolicyDenyDecision(t *testing.T) {
 	t.Parallel()
 	engine := newTestEngine(state.NewMemoryStore(), deciderFunc(func(_ context.Context, req schema.CanonicalRequest) (schema.Decision, error) {

@@ -25,6 +25,9 @@ func TestDeciderAllowAndDeny(t *testing.T) {
 	if !allowDecision.Allow {
 		t.Fatalf("expected allow decision, got deny: %+v", allowDecision)
 	}
+	if allowDecision.EnforcementMode != "enforce" || !allowDecision.EvaluatedAllow() {
+		t.Fatalf("expected explicit enforce-mode raw allow, got %+v", allowDecision)
+	}
 
 	denyReq := mustCanonicalRequest(t, "req-deny", "exec", map[string]any{"command": "rm -rf /tmp"})
 	denyDecision, err := decider.Decide(context.Background(), denyReq)
@@ -33,6 +36,9 @@ func TestDeciderAllowAndDeny(t *testing.T) {
 	}
 	if denyDecision.Allow {
 		t.Fatalf("expected deny decision")
+	}
+	if denyDecision.EnforcementMode != "enforce" || denyDecision.EvaluatedAllow() {
+		t.Fatalf("expected explicit enforce-mode raw deny, got %+v", denyDecision)
 	}
 }
 

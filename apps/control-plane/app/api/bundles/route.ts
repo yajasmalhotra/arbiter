@@ -32,10 +32,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const rolloutState = body.rolloutState ?? "draft";
+    if (!["draft", "shadow", "canary", "enforced", "rolled_back"].includes(rolloutState)) {
+      return NextResponse.json({ error: "invalid rollout state" }, { status: 400 });
+    }
     const bundle = await publishBundle({
       policyIds: Array.isArray(body.policyIds) ? body.policyIds.map(String) : undefined,
       data: body.data ?? {},
-      rolloutState: body.rolloutState ?? "draft",
+      rolloutState,
       actor: typeof body.actor === "string" ? body.actor : undefined
     });
     return NextResponse.json({ bundle }, { status: 201 });

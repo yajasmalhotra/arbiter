@@ -388,6 +388,10 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
   baseline: workload identity, RS256 permits, Redis-backed replay/state,
   Postgres audit, and a service-boundary key must all be configured.
 - Decisions are traceable by decision ID, policy version, data revision, request ID, and trace ID.
+- Shadow bundles now run real observe-before-enforce semantics: tools continue,
+  while decisions and metrics retain the raw `policy_allow` verdict and identify
+  calls that would have been denied. Production promotion always activates in
+  enforce mode.
 - Production bundle promotion and rollback can be approval-gated in the control plane.
 - Operations shows a compact bundle change preview (policy and top-level data
   changes) before an operator requests a promotion.

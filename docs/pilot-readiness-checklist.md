@@ -13,7 +13,9 @@ This checklist is the gate for calling Arbiter production-pilot ready.
 ## Policy and Governance
 
 - [x] Baseline and adversarial Rego policy tests added.
-- [x] Rollout states supported in control-plane model (`draft`, `shadow`, `canary`, `enforced`, `rolled_back`).
+- [x] Rollout states supported in the control-plane model (`draft`, `shadow`, `canary`, `enforced`, `rolled_back`).
+- [x] Shadow bundles implement observe-before-enforce behavior with explicit
+  effective and raw policy outcomes in audit, metrics, and the decision explorer.
 - [x] Policy CRUD and rollout transition endpoints available in control-plane MVP.
 
 ## Reliability and Observability

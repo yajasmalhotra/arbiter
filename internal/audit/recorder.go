@@ -8,15 +8,19 @@ import (
 )
 
 type Event struct {
-	DecisionID    string
-	RequestID     string
-	TraceID       string
-	TenantID      string
-	ToolName      string
-	Allow         bool
-	Reason        string
-	PolicyVersion string
-	Latency       time.Duration
+	DecisionID      string
+	RequestID       string
+	TraceID         string
+	TenantID        string
+	ToolName        string
+	Allow           bool
+	PolicyAllow     *bool
+	EnforcementMode string
+	Reason          string
+	PolicyPackage   string
+	PolicyVersion   string
+	DataRevision    string
+	Latency         time.Duration
 }
 
 type Recorder interface {
@@ -40,17 +44,24 @@ func (r *LogRecorder) Record(_ context.Context, event Event) {
 		return
 	}
 
-	r.logger.Info("arbiter decision",
+	attributes := []any{
 		slog.String("decision_id", event.DecisionID),
 		slog.String("request_id", event.RequestID),
 		slog.String("trace_id", event.TraceID),
 		slog.String("tenant_id", event.TenantID),
 		slog.String("tool_name", event.ToolName),
 		slog.Bool("allow", event.Allow),
+		slog.String("enforcement_mode", event.EnforcementMode),
 		slog.String("reason", event.Reason),
+		slog.String("policy_package", event.PolicyPackage),
 		slog.String("policy_version", event.PolicyVersion),
+		slog.String("data_revision", event.DataRevision),
 		slog.Duration("latency", event.Latency),
-	)
+	}
+	if event.PolicyAllow != nil {
+		attributes = append(attributes, slog.Bool("policy_allow", *event.PolicyAllow))
+	}
+	r.logger.Info("arbiter decision", attributes...)
 }
 
 func (r *LogRecorder) Ready(_ context.Context) error {
