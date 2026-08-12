@@ -69,6 +69,20 @@ test("blocks a policy denial before Pi executes the tool", async () => {
   assert.deepEqual(result, { block: true, reason: "shell command denied" });
 });
 
+test("sends the generic framework wire shape accepted by Arbiter", async () => {
+  let payload;
+  const guardrail = createArbiterPiGuardrail({
+    env: env(),
+    fetchImpl: async (_url, options) => {
+      payload = JSON.parse(options.body);
+      return response(403, { decision: { reason: "denied" } });
+    }
+  });
+  await guardrail.beforeToolCall({ toolName: "bash", toolCallId: "wire-1", input: { command: "true" } }, {});
+  assert.equal(payload.protocol, undefined);
+  assert.equal(payload.tool_name, "bash");
+});
+
 test("verifies an allow permit and records only the executed verified call", async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {

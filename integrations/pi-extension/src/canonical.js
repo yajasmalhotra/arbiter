@@ -19,9 +19,6 @@ export function buildCanonicalRequest({ config, event, ctx }) {
       }
     },
     tool_name: event.toolName,
-    parameters: event.input ?? {},
-    protocol: {
-      name: "pi"
-    }
+    parameters: event.input ?? {}
   };
 }

@@ -359,6 +359,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 | OpenClaw native plugin | Supported (alpha) | `integrations/openclaw-plugin` (`before_tool_call` + verify + state record) |
 | Pi native extension | Supported (alpha) | `integrations/pi-extension` (`tool_call` + verify + `tool_result`) |
 | OpenCode native plugin | Supported (alpha) | `integrations/opencode-plugin` (`tool.execute.before` + verify + `tool.execute.after`) |
+| Claude Code native plugin | Supported (alpha) | `integrations/claude-code-plugin` (`PreToolUse` + verify + post-tool state record) |
 | Local runtime (no Docker) | Supported (alpha) | `go run ./cmd/arbiter local init/start/status` |
 | Multi-tenant enterprise hardening | In progress | current model is strong for pilots, not final for broad self-serve use |
 
@@ -413,6 +414,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - OpenClaw native plugin support is alpha and currently optimized for stock filesystem/process tools.
 - Pi extension support is alpha and guards built-in or custom tools through Pi's native lifecycle hooks.
 - OpenCode plugin support is alpha and guards built-in, custom, or MCP tools through native execution hooks.
+- Claude Code plugin support is alpha and guards built-in, custom, or MCP tools through native execution hooks.
 - Control-plane multi-tenant governance still needs more hardening before calling it broadly enterprise-ready.
 - Arbiter should be paired with real executor isolation and least-privilege credentials. It is one layer in a defense-in-depth design, not the whole system.
 
@@ -423,6 +425,7 @@ Expected result: first verify returns HTTP `200` with `{"status":"verified"}`. R
 - OpenClaw native plugin setup: [integrations/openclaw-plugin/README.md](integrations/openclaw-plugin/README.md)
 - Pi native extension setup: [integrations/pi-extension/README.md](integrations/pi-extension/README.md)
 - OpenCode native plugin setup: [integrations/opencode-plugin/README.md](integrations/opencode-plugin/README.md)
+- Claude Code native plugin setup: [integrations/claude-code-plugin/README.md](integrations/claude-code-plugin/README.md)
 - Local harness integration guide: [integrating-local-harnesses.md](docs/integrating-local-harnesses.md)
 - Python SDK wrappers: [integrations/python/README.md](integrations/python/README.md)
 - Integration package overview: [integrations/README.md](integrations/README.md)

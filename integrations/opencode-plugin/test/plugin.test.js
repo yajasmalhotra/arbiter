@@ -74,6 +74,7 @@ test("verifies the exact canonical request and records only executed calls", asy
   await guardrail.before(input, output);
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[0].payload.parameters, output.args);
+  assert.equal(requests[0].payload.protocol, undefined);
   assert.equal(requests[0].payload.metadata.request_id, "opencode:session-2:call-2");
   assert.deepEqual(requests[1].payload.request, requests[0].payload);
 

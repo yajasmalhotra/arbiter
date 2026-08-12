@@ -217,6 +217,16 @@ test_write_canary_path_denied if {
 	result.reason == "tool policy denied"
 }
 
+test_claude_write_file_path_canary_denied if {
+	not data.arbiter.authz.allow with input as {
+		"schema_version": "v1alpha1",
+		"metadata": {"request_id": "claude-write-canary", "tenant_id": "tenant-local"},
+		"agent_context": {"actor": {"id": "claude-code-agent", "type": "agent"}},
+		"tool_name": "write",
+		"parameters": {"file_path": "/tmp/arbiter-deny-test/claude.txt", "content": "blocked"},
+	}
+}
+
 test_apply_patch_delete_file_denied if {
 	result := authz.decision with input as {
 		"metadata": {
@@ -230,6 +240,16 @@ test_apply_patch_delete_file_denied if {
 
 	not result.allow
 	result.reason == "tool policy denied"
+}
+
+test_opencode_patch_text_delete_file_denied if {
+	not data.arbiter.authz.allow with input as {
+		"schema_version": "v1alpha1",
+		"metadata": {"request_id": "opencode-patch-delete", "tenant_id": "tenant-local"},
+		"agent_context": {"actor": {"id": "opencode-agent", "type": "agent"}},
+		"tool_name": "apply_patch",
+		"parameters": {"patchText": "*** Begin Patch\n*** Delete File: src/secret.txt\n*** End Patch"},
+	}
 }
 
 test_apply_patch_canary_path_denied if {

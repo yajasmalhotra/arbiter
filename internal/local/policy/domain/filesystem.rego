@@ -147,6 +147,14 @@ blocked_test_target_requested if {
 }
 
 blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "file_path", ""))
+}
+
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "notebook_path", ""))
+}
+
+blocked_test_target_requested if {
 	blocked_test_string_references_path(object.get(input.parameters, "file", ""))
 }
 
@@ -162,8 +170,18 @@ blocked_test_target_requested if {
 	blocked_test_string_references_path(object.get(input.parameters, "patch", ""))
 }
 
+blocked_test_target_requested if {
+	blocked_test_string_references_path(object.get(input.parameters, "patchText", ""))
+}
+
 patch_delete_requested if {
 	patch := object.get(input.parameters, "patch", "")
+	is_string(patch)
+	contains(lower(patch), "*** delete file:")
+}
+
+patch_delete_requested if {
+	patch := object.get(input.parameters, "patchText", "")
 	is_string(patch)
 	contains(lower(patch), "*** delete file:")
 }

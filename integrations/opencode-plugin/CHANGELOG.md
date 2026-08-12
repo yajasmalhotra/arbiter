@@ -6,3 +6,4 @@
 - Fail-closed tool intercept and execution-permit verification.
 - State recording only after successful verified execution.
 - Local runtime discovery and shared cross-harness configuration aliases.
+- Strict generic-framework wire compatibility with the Arbiter interceptor.

@@ -1,0 +1,20 @@
+{
+  "name": "arbiter",
+  "description": "Enterprise guardrail integrations for agentic tool execution.",
+  "owner": {
+    "name": "Arbiter contributors"
+  },
+  "metadata": {
+    "description": "Enterprise guardrail integrations for agentic tool execution."
+  },
+  "plugins": [
+    {
+      "name": "arbiter-guardrails",
+      "source": "./integrations/claude-code-plugin",
+      "description": "Fail-closed Arbiter policy enforcement for Claude Code tools.",
+      "version": "0.1.0",
+      "category": "security",
+      "tags": ["guardrails", "policy", "enterprise", "tool-use"]
+    }
+  ]
+}

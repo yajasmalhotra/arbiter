@@ -1,0 +1,17 @@
+{
+  "name": "arbiter-guardrails",
+  "version": "0.1.0",
+  "description": "Fail-closed Arbiter guardrails for Claude Code tool execution.",
+  "author": {
+    "name": "Arbiter contributors"
+  },
+  "homepage": "https://github.com/yajasmalhotra/arbiter",
+  "repository": "https://github.com/yajasmalhotra/arbiter",
+  "license": "Apache-2.0",
+  "keywords": [
+    "guardrails",
+    "policy",
+    "enterprise",
+    "tool-use"
+  ]
+}

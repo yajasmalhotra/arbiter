@@ -26,8 +26,7 @@ function canonical(config, input, args) {
     },
     agent_context: { actor: { id: config.actorId, type: "agent" } },
     tool_name: input.tool,
-    parameters: args ?? {},
-    protocol: { name: "opencode" }
+    parameters: args ?? {}
   };
 }
 

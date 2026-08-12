@@ -23,8 +23,8 @@ feedback experience for built-in harness tools, but the underlying tool
 credentials should still be scoped as narrowly as possible.
 
 The Pi extension in `integrations/pi-extension` is the reference native
-adapter. The OpenClaw and OpenCode plugins demonstrate the same contract with
-different hook APIs.
+adapter. The OpenClaw, OpenCode, and Claude Code plugins demonstrate the same
+contract with different hook APIs.
 
 ## Native adapter contract
 

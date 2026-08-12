@@ -31,6 +31,11 @@ configuration, and conformance checklist, see
   - Hooks: `tool.execute.before` for fail-closed intercept/verify and `tool.execute.after` for state recording
   - Protects built-in, custom, and MCP tools exposed through OpenCode
   - Setup and configuration: `integrations/opencode-plugin/README.md`
+- `claude-code-plugin/`: Native Claude Code plugin for pre-execution tool enforcement.
+  - Marketplace package: `arbiter-guardrails@arbiter`
+  - Hooks: `PreToolUse` for fail-closed intercept/verify plus success and failure post-tool state recording
+  - Protects built-in, custom, and MCP tools exposed through Claude Code
+  - Setup and configuration: `integrations/claude-code-plugin/README.md`
 
 Run integration tests:
 
@@ -39,4 +44,5 @@ python3 -m unittest discover integrations/python/tests -v
 cd integrations/openclaw-plugin && npm test
 cd integrations/pi-extension && npm test
 cd integrations/opencode-plugin && npm test
+cd integrations/claude-code-plugin && npm test
 ```

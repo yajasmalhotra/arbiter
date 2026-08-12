@@ -19,7 +19,7 @@ var harnesses = []Harness{
 	{ID: "pi", Name: "Pi", Channel: "native extension"},
 	{ID: "openclaw", Name: "OpenClaw", Channel: "native plugin"},
 	{ID: "opencode", Name: "OpenCode", Channel: "native plugin"},
-	{ID: "claude-code", Name: "Claude Code", Channel: "MCP gateway"},
+	{ID: "claude-code", Name: "Claude Code", Channel: "native plugin"},
 	{ID: "gemini-cli", Name: "Gemini CLI", Channel: "MCP gateway"},
 	{ID: "goose", Name: "Goose", Channel: "MCP gateway"},
 	{ID: "mcp", Name: "Another MCP harness", Channel: "MCP gateway"},
@@ -98,9 +98,11 @@ func PrintPlan(output io.Writer, harness Harness, configPath, baseURL string) {
 		fmt.Fprintln(output, "   For checkout-based setup now, see integrations/opencode-plugin/README.md.")
 		fmt.Fprintln(output, "3. Start OpenCode. Set ARBITER_OPENCODE_PROTECT_TOOLS='*' to guard every tool.")
 	case "claude-code":
-		printMCPGateway(output)
-		fmt.Fprintln(output, "3. Register the protected MCP server:")
-		fmt.Fprintln(output, "   claude mcp add --transport http arbiter http://127.0.0.1:8090/mcp")
+		fmt.Fprintln(output, "2. Add the Arbiter marketplace and install the native plugin:")
+		fmt.Fprintln(output, "   claude plugin marketplace add yajasmalhotra/arbiter")
+		fmt.Fprintln(output, "   claude plugin install arbiter-guardrails@arbiter")
+		fmt.Fprintln(output, "3. Start Claude Code and run /hooks to verify the plugin hooks.")
+		fmt.Fprintln(output, "   Set ARBITER_CLAUDE_PROTECT_TOOLS='*' to guard every tool.")
 	case "gemini-cli":
 		printMCPGateway(output)
 		fmt.Fprintln(output, "3. Register the protected MCP server:")
